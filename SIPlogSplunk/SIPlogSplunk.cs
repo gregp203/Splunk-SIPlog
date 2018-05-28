@@ -643,10 +643,7 @@ public class SipSplunk
                 callLegsDisplayedCountPrev = callLegsDisplayed.Count;
                 ClearConsoleNoTop();
                 fakeCursor[0] = 0; fakeCursor[1] = 1;
-                WriteConsole("[Spacebar]-select calls [Enter]-for call flow [Q]-query splunk again [F]-filter [M]-look at all SIP msgs [Esc]-quit [N]-toggle NOTIFYs [O]-OPTIONs ", headerTxtClr, headerBkgrdClr);
-                if (methodDisplayed == "invite") { WriteConsole("[R]-registrations [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
-                if (methodDisplayed == "register") { WriteConsole("[I]-invites/calls [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
-                if (methodDisplayed == "subscribe") { WriteConsole("[I]-invites/calls [R]-registrations", headerTxtClr, headerBkgrdClr); }
+                WriteConsole("[Spacebar]-select calls [Enter]-for call flow [Q]-query splunk again [F]-filter [H]-help [Esc]-quit", headerTxtClr, headerBkgrdClr);
                 WriteLineConsole(" ", headerTxtClr, headerBkgrdClr);
                 String formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {4,-30} {5,-30} {6,-16} {7,-16}", "*", "index", "date", "time", "from:", "to:", "src IP", "dst IP");
                 WriteLineConsole(formatedStr, headerTxtClr, headerBkgrdClr);
@@ -942,10 +939,6 @@ public class SipSplunk
                 filterChange = true;
                 CallFilter();
                 lock (_DisplayLocker) displayMode = "calls";
-                if (SplunkReadDone)
-                {
-                    SortCalls();
-                }
                 Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
                 CallDisplay(true);
             }
@@ -964,21 +957,57 @@ public class SipSplunk
                     Console.ForegroundColor = fieldConsoleTxtClr;
                     bool tryAgain = true;
                     while (tryAgain)
-                        switch (Console.ReadKey(true).Key)
-                        {
-                            case ConsoleKey.Y:
-                                Console.Clear();
-                                System.Environment.Exit(0);
-                                break;
-                            case ConsoleKey.N:
-                                tryAgain = false;
-                                filterChange = true;
-                                CallFilter();
-                                if (SplunkReadDone) { SortCalls(); }
-                                Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
-                                CallDisplay(true);
-                                break;
-                        }
+                    switch (Console.ReadKey(true).Key)
+                    {
+                        case ConsoleKey.Y:
+                            Console.Clear();
+                            System.Environment.Exit(0);
+                            break;
+                        case ConsoleKey.N:
+                            tryAgain = false;
+                            filterChange = true;
+                            CallFilter();
+                            Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
+                            CallDisplay(true);
+                            break;
+                    }
+                }
+            }
+            if (keypressed.Key == ConsoleKey.H)
+            {
+                lock (_DisplayLocker)
+                {
+                    Console.ForegroundColor = msgBoxTxt;
+                    Console.BackgroundColor = msgBoxBkgrd;
+                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 57) / 2)));
+                    Console.CursorLeft = center; Console.WriteLine(@"+-----------------------------------------------------+\ ");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Key                                                | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Down Arrow / Page Down ---------- move cursor down | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Up Arrow / Page Up ---------------- move cursor up | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Spacebar ---------------------- select call leg(s) | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Enter ------------------ Show diagram of call flow | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Esc ------------------------- Exit the application | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  H ------------------------------- This help dialog | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  M ------------------------ Search all SIP messages | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Q ----------------------------- Query splunk again | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  C ----------------------- Write configuration file | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  F --------------------- Filter the displayed calls | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  N ---------------------- Toggle display of NOTIFYs | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  O ----- Search Option Messages and 200 OK response | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  R ----------------------------- Show registrations | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  S ---------------------------- Show subscritptions | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  I ------------------------ Show calls with INTIVES | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Left Arrow / Right Arrow ------- change sort order | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|                                                     | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"+-----------------------------------------------------+ |");
+                    Console.CursorLeft = center; Console.WriteLine(@" \_____________________________________________________\|");
+                    Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
+                    Console.ForegroundColor = fieldConsoleTxtClr;
+                    Console.ReadKey(true);
+                    filterChange = true;
+                    CallFilter();
+                    Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
+                    CallDisplay(true);
                 }
             }
             if (keypressed.Key == ConsoleKey.M)
@@ -1001,7 +1030,6 @@ public class SipSplunk
                     } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
                     filterChange = true;
                     CallFilter();
-                    if (SplunkReadDone) { SortCalls(); }
                     Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
                     CallDisplay(true);
                     displayMode = "calls";
@@ -1083,53 +1111,57 @@ public class SipSplunk
             }
             if (SplunkReadDone && keypressed.Key == ConsoleKey.C)
             {
-                Console.ForegroundColor = msgBoxTxt;
-                Console.BackgroundColor = msgBoxBkgrd;
-                int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
-                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+\ ");
-                Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name of the config file to be created. .sls will be appended to the end of the file name | |");
-                Console.CursorLeft = center; Console.WriteLine(@"|                                                                                                         | |");
-                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+ |");
-                Console.CursorLeft = center; Console.WriteLine(@" \_________________________________________________________________________________________________________\|");
-                Console.CursorTop -= 3;
-                Console.CursorLeft = center + 2;
-                string writeFileName = Console.ReadLine();
-                if (String.IsNullOrEmpty(writeFileName))
+                bool goodentry = false;
+                while (!goodentry)
                 {
-                    Console.ForegroundColor = ConsoleColor.White;
-                    Console.CursorTop = Console.CursorTop - 1;
-                    Console.CursorLeft = center;
-                    Console.WriteLine("| No file name was entered. Press any key to continue");
-                    Console.ForegroundColor = fieldConsoleTxtClr;
-                    Console.CursorVisible = true;
-                    Console.ReadKey(true);
-                    Console.CursorTop -= 4;
-                }
-                else
-                {
-                    writeFileName = writeFileName + ".sls";
-                    try
+                    Console.ForegroundColor = msgBoxTxt;
+                    Console.BackgroundColor = msgBoxBkgrd;
+                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
+                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+\ ");
+                    Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name of the config file to be created. .sls will be appended to the end of the file name | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|                                                                                                         | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+ |");
+                    Console.CursorLeft = center; Console.WriteLine(@" \_________________________________________________________________________________________________________\|");
+                    Console.CursorTop -= 3;
+                    Console.CursorLeft = center + 2;
+                    string writeFileName = Console.ReadLine();
+                    if (String.IsNullOrEmpty(writeFileName))
                     {
-                        // Attempt to open output file.
-                        StreamWriter flowConfigFileWriter = new StreamWriter(writeFileName);
-                        flowConfigFileWriter.WriteLine(splunkUrl);
-                        flowConfigFileWriter.WriteLine(searchStrg);
-                        flowConfigFileWriter.WriteLine(earliest);
-                        flowConfigFileWriter.WriteLine(latest);
-                        flowConfigFileWriter.Close();
+                        Console.ForegroundColor = ConsoleColor.White;
+                        Console.CursorTop = Console.CursorTop - 1;
+                        Console.CursorLeft = center;
+                        Console.WriteLine("| No file name was entered. Press any key to continue");
+                        Console.ForegroundColor = fieldConsoleTxtClr;
+                        Console.CursorVisible = true;
+                        Console.ReadKey(true);
+                        Console.CursorTop -= 3;
+                        goodentry = true;
                     }
-                    catch (IOException e)
+                    else
                     {
-                        TextWriter errorWriter = Console.Error;
-                        errorWriter.WriteLine(e.Message);
+                        writeFileName = writeFileName + ".sls";
+                        try
+                        {
+                            // Attempt to open output file.
+                            StreamWriter flowConfigFileWriter = new StreamWriter(writeFileName);
+                            flowConfigFileWriter.WriteLine(splunkUrl);
+                            flowConfigFileWriter.WriteLine(searchStrg);
+                            flowConfigFileWriter.WriteLine(earliest);
+                            flowConfigFileWriter.WriteLine(latest);
+                            flowConfigFileWriter.Close();
+                        }
+                        catch (IOException e)
+                        {
+                            TextWriter errorWriter = Console.Error;
+                            errorWriter.WriteLine(e.Message);
+                        }
+                        goodentry = true;
+                        
                     }
-                    if (SplunkReadDone) { SortCalls(); }
                     Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
                     Console.ForegroundColor = fieldConsoleTxtClr;
-                    CallListPosition = 0;
                     CallDisplay(true);
-                    Console.SetWindowPosition(0, 0);
-                    Console.SetCursorPosition(0, 4);
+                    Console.SetWindowPosition(0, Math.Min (Math.Max(0, Console.CursorTop - Console.WindowHeight/2), Console.BufferHeight- Console.WindowHeight));
                 }
             }
             if (keypressed.Key == ConsoleKey.F)
@@ -1384,7 +1416,14 @@ public class SipSplunk
                 Console.BufferHeight = Math.Max(Math.Min(10 + selectedmessages.Count, Int16.MaxValue - 1), Console.BufferHeight);
             }
             flowWidth = 24;
-            WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            if (writeFlowToFile)
+            {
+                WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            }
+            else
+            {
+                WriteConsole("[H]-Help"+ new String(' ', 9), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            }
             foreach (string ip in IPsOfIntrest)
             {
                 flowWidth = flowWidth + 29;
@@ -1935,6 +1974,32 @@ public class SipSplunk
                     flowFileWriter.Close();
                 }
                 Flow(false);  //display call flow Diagram
+            }
+            else if (keypress.Key == ConsoleKey.H)
+            {
+                lock (_DisplayLocker)
+                {
+                    Console.ForegroundColor = msgBoxTxt;
+                    Console.BackgroundColor = msgBoxBkgrd;
+                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 64) / 2)));
+                    Console.CursorLeft = center; Console.WriteLine(@"+------------------------------------------------------------+\ ");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Key                                                       | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Down Arrow / Page Down ----------------- move cursor down | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Up Arrow / Page Up ----------------------- move cursor up | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Spacebar / Enter ----------------------- view ISP message | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Enter ------------------------- Show diagram of call flow | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Esc ----------------------- Exit to the list of call legs | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  H -------------------------------------- This help dialog | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  D -- Show SIP messages where  Src and Dst IP are the same | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  O --------------------------- Write the diagram to a file | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|                                                            | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"+------------------------------------------------------------+ |");
+                    Console.CursorLeft = center; Console.WriteLine(@" \____________________________________________________________\|");
+                    Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
+                    Console.ForegroundColor = fieldConsoleTxtClr;
+                    Console.ReadKey(true);
+                    Flow(false);  //display call flow Diagram
+                }
             }
         }
         return;
