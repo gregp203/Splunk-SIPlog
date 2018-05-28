@@ -1471,7 +1471,8 @@ public class SipSplunk
             else
             {
                 string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));
-                string spaceRight = new String(' ', 27 - (int)(Math.Ceiling((decimal)(displayedline.Length / 2)))) + "|";
+                //string spaceRight = new String(' ', 27 - (int)(Math.Floor((decimal)(displayedline.Length / 2)))) + "|";
+                string spaceRight = new String(' ', 53 - spaceLeft.Length- displayedline.Length) + "|";
                 if (invert)
                 {
                     Console.BackgroundColor = fieldConsoleBkgrdInvrtClr;
@@ -1626,7 +1627,8 @@ public class SipSplunk
             else
             {
                 string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));
-                string spaceRight = new String(' ', 27 - (int)(Math.Ceiling((decimal)(displayedline.Length / 2)))) + "|";
+                //string spaceRight = new String(' ', 27 - (int)(Math.Ceiling((decimal)(displayedline.Length / 2)))) + "|";
+                string spaceRight = new String(' ', 53 - spaceLeft.Length- displayedline.Length) + "|";
                 if (invert)
                 {
                     TxtColor = fieldAttrTxtInvrtClr;
