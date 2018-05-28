@@ -10,7 +10,7 @@ using Microsoft.Win32.SafeHandles;
 using System.Net;
 using Splunk.Client;
 using System.Net.Http;
-
+using System.Globalization;
 
 public class SipSplunk
 {
@@ -25,8 +25,8 @@ public class SipSplunk
     string endMsgRgxStr = @"Sent:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2} Recv:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2}"; // for AudioCodes
     */
     string beginMsgRgxStr = @"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"; //regex to match the begining of the sip message (if it starts with a date and has time and two IP addresses)  for tcpdumpdump
-    string dateRgxStr = @"(\d{4}-\d{2}-\d{2})"; //for tcpdumpdump    
-    string timeRgxStr = @"(\d{2}:\d{2}:\d{2}.\d{6})(-|\+)(\d{2}:\d{2})"; // group 1 is local time group 2 is + or - group 3 is TZ offset
+    string dateRgxStr = @"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}(-|\+)\d{2}:\d{2})"; //for tcpdumpdump    
+    //string timeRgxStr = @"(\d{2}:\d{2}:\d{2}.\d{6})(-|\+)(\d{2}:\d{2})"; // group 1 is local time group 2 is + or - group 3 is TZ offset
     string srcIpPortRgxStr = @"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*(?= >)";
     string srcIpRgxStr = @"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?=(.|:)\d* >)";
     string dstIpPortRgxStr = @"(?<=> )(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*";
@@ -45,7 +45,7 @@ public class SipSplunk
     string cseqRgxStr = @"CSeq:\s?(\d{1,3})\s?(\w*)";
     Regex beginmsgRgx;
     Regex dateRgx;
-    Regex timeRgx;
+    //Regex timeRgx;
     Regex srcIpPortRgx;
     Regex srcIpRgx;
     Regex dstIpPortRgx;
@@ -62,8 +62,9 @@ public class SipSplunk
     Regex mAudioRgx;
     Regex occasRgx;
     Regex cseqRgx;
-    static readonly object _locker = new object();
+    static readonly object _DataLocker = new object();
     static readonly object _QueryAgainlocker = new object();
+    static readonly object _DisplayLocker = new object();
     enum CallLegColors { Green, Cyan, Red, Magenta, Yellow, DarkGreen, DarkCyan, DarkRed, DarkMagenta };
     enum AttrColor : short { Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, Darkyellow, Gray, DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White, }
     String[,] sortFields;
@@ -71,8 +72,8 @@ public class SipSplunk
     List<string> streamData = new List<string>();
     List<string[]> messages = new List<string[]>();
     //  index start of msg[0] 
-    //  date[1] 
-    //  time[2]
+    //  date and time stamp[1] 
+    //  UTC[2]
     //  src IP[3]
     //  dst IP[4] 
     //  Request/Method line of SIP msg[5] 
@@ -163,7 +164,7 @@ public class SipSplunk
         Regex.CacheSize = 20;
         beginmsgRgx = new Regex(beginMsgRgxStr, RegexOptions.Compiled);
         dateRgx = new Regex(dateRgxStr, RegexOptions.Compiled);
-        timeRgx = new Regex(timeRgxStr, RegexOptions.Compiled);
+        //timeRgx = new Regex(timeRgxStr, RegexOptions.Compiled);
         srcIpPortRgx = new Regex(srcIpPortRgxStr, RegexOptions.Compiled);
         srcIpRgx = new Regex(srcIpRgxStr, RegexOptions.Compiled);
         dstIpPortRgx = new Regex(dstIpPortRgxStr, RegexOptions.Compiled);
@@ -354,7 +355,7 @@ public class SipSplunk
         }
         catch (Exception ex)
         {
-            lock (_locker)
+            lock (_DisplayLocker)
             {
                 Console.WriteLine("\nMessage ---\n{0}", ex.Message);
                 Console.WriteLine(
@@ -390,16 +391,13 @@ public class SipSplunk
                     TopLine("Connecting to splunk", 0);
                     service.LogOnAsync(user, password).Wait();
                     TopLine("Getting results from query " + searchStrg, 0);
-                    SplunkQuery(service, searchStrg, earliest, latest).Wait();
-                    lock (_locker)
-                    {
-                        if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
-                        SortCalls();
-                        if (displayMode == "calls") CallDisplay(true);
-                        Console.SetWindowPosition(0, 0);
-                        Console.SetCursorPosition(0, 4);
-                        SplunkReadDone = true;
-                    }
+                    SplunkQuery(service, searchStrg, earliest, latest).Wait();                    
+                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
+                    /*lock (_DataLocker) SortCalls();
+                    if (displayMode == "calls") CallDisplay(true);
+                    Console.SetWindowPosition(0, 0);
+                    Console.SetCursorPosition(0, 4);*/
+                    SplunkReadDone = true;                    
                 }
                 catch (Exception ex)
                 {
@@ -428,7 +426,6 @@ public class SipSplunk
             }
         }
     }
-
 
     async Task SplunkQuery(Service service, string searchStrg, string earliest, string latest)
     {
@@ -478,7 +475,8 @@ public class SipSplunk
                 // get the index of the start of the msg
                 outputarray[0] = currentSplunkLoadProg.ToString();
                 outputarray[1] = dateRgx.Match(line).ToString();    //date  
-                outputarray[2] = timeRgx.Match(line).ToString();     //time
+                //outputarray[2] = timeRgx.Match(line).ToString();     //time
+                outputarray[2] = DateTime.Parse(dateRgx.Match(line).ToString()).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
                 if (IncludePorts) { outputarray[3] = srcIpPortRgx.Match(line).ToString(); }
                 else { outputarray[3] = srcIpRgx.Match(line).ToString(); }                               //src IP                                                                        
                 if (IncludePorts) { outputarray[4] = dstIpPortRgx.Match(line).ToString(); }
@@ -550,24 +548,14 @@ public class SipSplunk
                 if (outputarray[5] == null) { outputarray[5] = "Invalid SIP characters"; }
                 if (sipTwoDotOfound)
                 {
-                    lock (_locker)
-                    {
-                        messages.Add(outputarray);
-                    }
-                    if (displayMode == "flow")
-                    {
-                        if (callIDsOfIntrest.Contains(outputarray[6]))
-                        {
-                            Flow(true);
-                        }
-                    }
+                    lock (_DataLocker) messages.Add(outputarray);       //messages touched by another thread                    
                     bool getcallid = false;
                     if (outputarray[3] != outputarray[4])
                     {
                         if (outputarray[5].Contains("INVITE") || outputarray[5].Contains("NOTIFY") || outputarray[5].Contains("REGISTER") || outputarray[5].Contains("SUBSCRIBE"))
                         {
-                            if (callLegs.Count > 0) // if it is not the first message
-                            {
+                            lock (_DataLocker) if (callLegs.Count > 0) // if it is not the first message   // callLegs touched by another thread
+                                {
                                 //check if call-id was not already gotten
                                 for (int j = 0; j < callLegs.Count; j++)
                                 {
@@ -587,8 +575,8 @@ public class SipSplunk
                             {
                                 // copy from msg input to arrayout
                                 String[] arrayout = new String[10];
-                                arrayout[0] = outputarray[1];//  date [0]
-                                arrayout[1] = outputarray[2];//  time [1]
+                                arrayout[0] = outputarray[1];//  Time date stamp [0]
+                                arrayout[1] = outputarray[2];//  UTC [1]
                                 arrayout[2] = outputarray[7];//  To: [2]
                                 arrayout[3] = outputarray[8];//  From: [3]
                                 arrayout[4] = outputarray[6];//  Call-ID [4]
@@ -602,19 +590,16 @@ public class SipSplunk
                                 else if (outputarray[5].Contains("SUBSCRIBE")) { arrayout[9] = "subscribe"; subscriptions++; }
                                 if (outputarray[6] != null)
                                 {
-                                    lock (_locker)
-                                    {
-                                        callLegs.Add(arrayout);
-                                        if (displayMode == "calls")
+                                    lock (_DataLocker) callLegs.Add(arrayout);  //callLegs touched by another thread
+                                    lock (_DisplayLocker) if (displayMode == "calls") // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread
                                         {
-                                            if (arrayout[9] == methodDisplayed || (showNotify && arrayout[9] == "notify"))
-                                            {
-                                                CallFilter();
-                                                CallDisplay(false);
-                                            }
+                                        if (arrayout[9] == methodDisplayed || (showNotify && arrayout[9] == "notify")) 
+                                        {   
+                                            CallFilter();
+                                            CallDisplay(false);
                                         }
                                     }
-                                }
+                                }                                
                             }
                         }
                     }
@@ -631,66 +616,69 @@ public class SipSplunk
     {
         string line;
         line = splunkSR.ReadLine();
-        streamData.Add(line);
+        lock (_DataLocker) streamData.Add(line);  //touched by another threAD
         currentSplunkLoadProg++;
         return line;
     }
 
     void CallDisplay(bool newFullScreen)
     {
-        Console.WindowWidth = Math.Min(161, Console.LargestWindowWidth);
-        Console.WindowHeight = Math.Min(44, Console.LargestWindowHeight);
-        Console.BufferWidth = 200;
-        Console.BufferHeight = Math.Max(10 + callLegsDisplayed.Count, Console.BufferHeight);
-        //if the following conditions true , just add the calls to the bottom of the screen without redrawing
-        if (!newFullScreen && !filterChange && callLegsDisplayedCountPrev != 0 && callLegsDisplayed.Count > callLegsDisplayedCountPrev)
+        lock (_DisplayLocker)
         {
-            for (int i = callLegsDisplayedCountPrev; i < callLegsDisplayed.Count; i++)
+            Console.WindowWidth = Math.Min(161, Console.LargestWindowWidth);
+            Console.WindowHeight = Math.Min(44, Console.LargestWindowHeight);
+            Console.BufferWidth = 200;
+            Console.BufferHeight = Math.Max(10 + callLegsDisplayed.Count, Console.BufferHeight);
+            //if the following conditions true , just add the calls to the bottom of the screen without redrawing
+            if (!newFullScreen && !filterChange && callLegsDisplayedCountPrev != 0 && callLegsDisplayed.Count > callLegsDisplayedCountPrev)
             {
-                WriteScreenCallLine(callLegsDisplayed[i], i);
-            }
-        }
-        else
-        {
-            filterChange = false;
-            callLegsDisplayedCountPrev = callLegsDisplayed.Count;
-            ClearConsoleNoTop();
-            fakeCursor[0] = 0; fakeCursor[1] = 1;
-            WriteConsole("[Spacebar]-select calls [Enter]-for call flow [Q]-query splunk again [F]-filter [M]-look at all SIP msgs [Esc]-quit [N]-toggle NOTIFYs [O]-OPTIONs ", headerTxtClr, headerBkgrdClr);
-            if (methodDisplayed == "invite") { WriteConsole("[R]-registrations [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
-            if (methodDisplayed == "register") { WriteConsole("[I]-invites/calls [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
-            if (methodDisplayed == "subscribe") { WriteConsole("[I]-invites/calls [R]-registrations", headerTxtClr, headerBkgrdClr); }
-            WriteLineConsole(" ", headerTxtClr, headerBkgrdClr);
-            String formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {4,-30} {5,-30} {6,-16} {7,-16}", "*", "index", "date", "time", "from:", "to:", "src IP", "dst IP");
-            WriteLineConsole(formatedStr, headerTxtClr, headerBkgrdClr);
-            if (methodDisplayed == "invite") { WriteConsole("----invites/calls---", headerTxtClr, headerBkgrdClr); }
-            if (methodDisplayed == "register") { WriteConsole("----registrations---", headerTxtClr, headerBkgrdClr); }
-            if (methodDisplayed == "subscribe") { WriteConsole("----subscriptions---", headerTxtClr, headerBkgrdClr); }
-            WriteLineConsole(new String('-', 140), headerTxtClr, headerBkgrdClr);
-            if (callLegsDisplayed.Count > 0)
-            {
-                for (int i = 0; i < callLegsDisplayed.Count; i++)
+                for (int i = callLegsDisplayedCountPrev; i < callLegsDisplayed.Count; i++)
                 {
                     WriteScreenCallLine(callLegsDisplayed[i], i);
                 }
             }
-            WriteScreen(sortFields[callsDisplaysortIdx, 0], Int16.Parse(sortFields[callsDisplaysortIdx, 1]), 2, sortTxtdClr, sortBkgrdClr);
-        }
-        string footerOne = "Number of SIP messages found : " + messages.Count.ToString();
-        string footerTwo = "Number of SIP transactions found : " + callLegs.Count.ToString();
-        string footerThree = CallInvites.ToString() + " SIP INVITEs found | " + notifications.ToString() + " SIP NOTIFYs found | " + registrations.ToString() + " SIP REGISTERs found | " + subscriptions.ToString() + " SIP SUBSCRIBEs found";
-        WriteScreen(footerOne + new String(' ', Console.BufferWidth - footerOne.Length), 0, (short)(callLegsDisplayed.Count + 4), footerTxtClr, footerBkgrdClr);
-        WriteScreen(footerTwo + new String(' ', Console.BufferWidth - footerTwo.Length), 0, (short)(callLegsDisplayed.Count + 5), footerTxtClr, footerBkgrdClr);
-        WriteScreen(footerThree + new String(' ', Console.BufferWidth - footerThree.Length), 0, (short)(callLegsDisplayed.Count + 6), footerTxtClr, footerBkgrdClr);
-        if (callLegsDisplayed.Count > 0)
-        {
-            Console.SetCursorPosition(0, CallListPosition + 4);
-            Console.BackgroundColor = fieldConsoleTxtClr;
-            Console.ForegroundColor = fieldConsoleBkgrdClr;
-            CallLine(callLegsDisplayed[CallListPosition], CallListPosition);
-            Console.SetCursorPosition(0, CallListPosition + 4);
-            Console.BackgroundColor = fieldConsoleBkgrdClr;
-            Console.ForegroundColor = fieldConsoleTxtClr;
+            else
+            {
+                filterChange = false;
+                callLegsDisplayedCountPrev = callLegsDisplayed.Count;
+                ClearConsoleNoTop();
+                fakeCursor[0] = 0; fakeCursor[1] = 1;
+                WriteConsole("[Spacebar]-select calls [Enter]-for call flow [Q]-query splunk again [F]-filter [M]-look at all SIP msgs [Esc]-quit [N]-toggle NOTIFYs [O]-OPTIONs ", headerTxtClr, headerBkgrdClr);
+                if (methodDisplayed == "invite") { WriteConsole("[R]-registrations [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
+                if (methodDisplayed == "register") { WriteConsole("[I]-invites/calls [S]-subscriptions", headerTxtClr, headerBkgrdClr); }
+                if (methodDisplayed == "subscribe") { WriteConsole("[I]-invites/calls [R]-registrations", headerTxtClr, headerBkgrdClr); }
+                WriteLineConsole(" ", headerTxtClr, headerBkgrdClr);
+                String formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {4,-30} {5,-30} {6,-16} {7,-16}", "*", "index", "date", "time", "from:", "to:", "src IP", "dst IP");
+                WriteLineConsole(formatedStr, headerTxtClr, headerBkgrdClr);
+                if (methodDisplayed == "invite") { WriteConsole("----invites/calls---", headerTxtClr, headerBkgrdClr); }
+                if (methodDisplayed == "register") { WriteConsole("----registrations---", headerTxtClr, headerBkgrdClr); }
+                if (methodDisplayed == "subscribe") { WriteConsole("----subscriptions---", headerTxtClr, headerBkgrdClr); }
+                WriteLineConsole(new String('-', 140), headerTxtClr, headerBkgrdClr);
+                if (callLegsDisplayed.Count > 0)
+                {
+                    for (int i = 0; i < callLegsDisplayed.Count; i++)
+                    {
+                        WriteScreenCallLine(callLegsDisplayed[i], i);
+                    }
+                }
+                WriteScreen(sortFields[callsDisplaysortIdx, 0], Int16.Parse(sortFields[callsDisplaysortIdx, 1]), 2, sortTxtdClr, sortBkgrdClr);
+            }
+            string footerOne = "Number of SIP messages found : " + messages.Count.ToString();
+            string footerTwo = "Number of SIP transactions found : " + callLegs.Count.ToString();
+            string footerThree = CallInvites.ToString() + " SIP INVITEs found | " + notifications.ToString() + " SIP NOTIFYs found | " + registrations.ToString() + " SIP REGISTERs found | " + subscriptions.ToString() + " SIP SUBSCRIBEs found";
+            WriteScreen(footerOne + new String(' ', Console.BufferWidth - footerOne.Length), 0, (short)(callLegsDisplayed.Count + 4), footerTxtClr, footerBkgrdClr);
+            WriteScreen(footerTwo + new String(' ', Console.BufferWidth - footerTwo.Length), 0, (short)(callLegsDisplayed.Count + 5), footerTxtClr, footerBkgrdClr);
+            WriteScreen(footerThree + new String(' ', Console.BufferWidth - footerThree.Length), 0, (short)(callLegsDisplayed.Count + 6), footerTxtClr, footerBkgrdClr);
+            if (callLegsDisplayed.Count > 0)
+            {
+                Console.SetCursorPosition(0, CallListPosition + 4);
+                Console.BackgroundColor = fieldConsoleTxtClr;
+                Console.ForegroundColor = fieldConsoleBkgrdClr;
+                CallLine(callLegsDisplayed[CallListPosition], CallListPosition);
+                Console.SetCursorPosition(0, CallListPosition + 4);
+                Console.BackgroundColor = fieldConsoleBkgrdClr;
+                Console.ForegroundColor = fieldConsoleTxtClr;
+            }
         }
     }
 
@@ -705,8 +693,8 @@ public class SipSplunk
             Console.WriteLine("{0,-2} {1,-6} {2,-10} {3,-12} {5,-30} {4,-30} {6,-16} {7,-17}"
                 , InputCallLegs[5]
                 , indx
-                , InputCallLegs[0]
-                , ((InputCallLegs[1]).Substring(0, 11)) ?? String.Empty
+                , DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)   //date
+                , (DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture)) ?? String.Empty
                 , InputCallLegs[2]
                 , InputCallLegs[3]
                 , InputCallLegs[6]
@@ -751,8 +739,8 @@ public class SipSplunk
             string formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {5,-30} {4,-30} {6,-16} {7,-17}"
                 , callLeg[5]
                 , indx
-                , callLeg[0]
-                , callLeg[1].Substring(0, 11)
+                , DateTime.Parse(callLeg[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)   //date
+                , (DateTime.Parse(callLeg[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture)) ?? String.Empty
                 , callLeg[2]
                 , callLeg[3]
                 , callLeg[6]
@@ -763,7 +751,7 @@ public class SipSplunk
 
     void CallFilter()
     {
-        lock (_locker)
+        lock (_DataLocker)
         {
             callLegsDisplayed.Clear();
             if (!string.IsNullOrEmpty(filter[0]))
@@ -808,7 +796,7 @@ public class SipSplunk
 
     void MoveCursor(bool up, int amount)
     {
-        lock (_locker)
+        lock (_DisplayLocker)
         {
             Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
             Console.ForegroundColor = fieldConsoleTxtClr;
@@ -836,12 +824,9 @@ public class SipSplunk
     {
         bool done = false;
         CallListPosition = 0;
-        lock (_locker)
-        {
-            CallDisplay(true);
-            Console.SetCursorPosition(0, 4);
-            Console.SetWindowPosition(0, 0);
-        }
+        CallDisplay(true);
+        Console.SetCursorPosition(0, 4);
+        Console.SetWindowPosition(0, 0);
         ConsoleKeyInfo keypressed;
         while (done == false)
         {
@@ -861,7 +846,10 @@ public class SipSplunk
                 }
                 else
                 {
-                    MoveCursor(false, (callLegsDisplayed.Count - 1) - CallListPosition);
+                    if (CallListPosition < callLegsDisplayed.Count - 1)
+                    {
+                        MoveCursor(false, (callLegsDisplayed.Count - 1) - CallListPosition);
+                    }
                 }
             }
             if (keypressed.Key == ConsoleKey.UpArrow)
@@ -883,7 +871,7 @@ public class SipSplunk
                 }
                 else
                 {
-                    MoveCursor(true, CallListPosition);
+                    if (callLegsDisplayed.Count > 0) MoveCursor(true, CallListPosition);
                 }
                 if (CallListPosition == 0)
                 {
@@ -931,15 +919,15 @@ public class SipSplunk
                         }
                     );
                     callLegsDisplayed[CallListPosition][5] = "*";
-                    callLegs[clindx][5] = "*";
+                    lock (_DataLocker) callLegs[clindx][5] = "*";  // callLegs touched by other thread
                     numSelectedCalls++;
                     Console.BackgroundColor = fieldConsoleBkgrdInvrtClr;   //change the colors of the current postion to inverted
                     Console.ForegroundColor = fieldConsoleTxtInvrtClr;
                     CallLine(callLegsDisplayed[CallListPosition], CallListPosition);
                     Console.CursorTop = Console.CursorTop - 1;
                 }
-                callIDsOfIntrest.Clear();
-                for (int i = 0; i < callLegs.Count; i++)       //find the selected calls from the call Legs Displayed
+                lock (_DataLocker) callIDsOfIntrest.Clear();
+                lock (_DataLocker) for (int i = 0; i < callLegs.Count; i++)       //find the selected calls from the call Legs Displayed
                 {
                     if (callLegs[i][5] == "*")
                     {
@@ -949,11 +937,11 @@ public class SipSplunk
             }
             if (numSelectedCalls > 0 && keypressed.Key == ConsoleKey.Enter)
             {
-                displayMode = "flow";
+                lock (_DisplayLocker) displayMode = "flow";
                 FlowSelect();   //select SIP message from the call flow diagram                        
                 filterChange = true;
                 CallFilter();
-                displayMode = "calls";
+                lock (_DisplayLocker) displayMode = "calls";
                 if (SplunkReadDone)
                 {
                     SortCalls();
@@ -963,7 +951,7 @@ public class SipSplunk
             }
             if (keypressed.Key == ConsoleKey.Escape)
             {
-                lock (_locker)
+                lock (_DisplayLocker)
                 {
                     Console.ForegroundColor = msgBoxTxt;
                     Console.BackgroundColor = msgBoxBkgrd;
@@ -995,26 +983,29 @@ public class SipSplunk
             }
             if (keypressed.Key == ConsoleKey.M)
             {
-                do
-                {
-                    displayMode = "messages";
-                    ListAllMsg(null);
-                    Console.ForegroundColor = msgBoxTxt;
-                    Console.BackgroundColor = msgBoxBkgrd;
-                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 71) / 2)));
-                    Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+\ ");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Press any key to query SIP messages again or press [esc] to quit | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+ |");
-                    Console.CursorLeft = center; Console.WriteLine(@" \___________________________________________________________________\|");
-                    Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
-                    Console.ForegroundColor = fieldConsoleTxtClr;
-                } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
-                filterChange = true;
-                CallFilter();
-                if (SplunkReadDone) { SortCalls(); }
-                Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
-                CallDisplay(true);
-                displayMode = "calls";
+                lock (_DisplayLocker)
+                { 
+                    do
+                    {
+                        displayMode = "messages";
+                        ListAllMsg(null);
+                        Console.ForegroundColor = msgBoxTxt;
+                        Console.BackgroundColor = msgBoxBkgrd;
+                        int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 71) / 2)));
+                        Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+\ ");
+                        Console.CursorLeft = center; Console.WriteLine(@"|  Press any key to query SIP messages again or press [esc] to quit | |");
+                        Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+ |");
+                        Console.CursorLeft = center; Console.WriteLine(@" \___________________________________________________________________\|");
+                        Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
+                        Console.ForegroundColor = fieldConsoleTxtClr;
+                    } while (Console.ReadKey(true).Key != ConsoleKey.Escape);
+                    filterChange = true;
+                    CallFilter();
+                    if (SplunkReadDone) { SortCalls(); }
+                    Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
+                    CallDisplay(true);
+                    displayMode = "calls";
+                }
             }
             if (SplunkReadDone && keypressed.Key == ConsoleKey.Q)
             {
@@ -1022,7 +1013,8 @@ public class SipSplunk
                 ClearConsoleNoTop();
                 Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
                 Console.ForegroundColor = fieldConsoleTxtClr;
-                Console.SetWindowPosition(0, 1);
+                Console.SetWindowPosition(0, 0);
+                Console.SetCursorPosition(0, 1);
                 Regex timeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}");
                 bool goodentry = false;
                 while (!goodentry)
@@ -1078,77 +1070,71 @@ public class SipSplunk
                 selectedmessages.Clear();
                 IPsOfIntrest.Clear();
                 callIDsOfIntrest.Clear();
+                numSelectedCalls = 0;
                 lock (_QueryAgainlocker)
                 {
                     Monitor.Pulse(_QueryAgainlocker);
                 }
                 displayMode = "calls";
                 CallListPosition = 0;
-                lock (_locker)
-                {
-                    CallDisplay(true);
-                    Console.SetCursorPosition(0, 4);
-                    Console.SetWindowPosition(0, 0);
-                }
+                CallDisplay(true);
+                Console.SetCursorPosition(0, 4);
+                Console.SetWindowPosition(0, 0);
             }
             if (SplunkReadDone && keypressed.Key == ConsoleKey.C)
             {
-                lock (_locker)
+                Console.ForegroundColor = msgBoxTxt;
+                Console.BackgroundColor = msgBoxBkgrd;
+                int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
+                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+\ ");
+                Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name of the config file to be created. .sls will be appended to the end of the file name | |");
+                Console.CursorLeft = center; Console.WriteLine(@"|                                                                                                         | |");
+                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+ |");
+                Console.CursorLeft = center; Console.WriteLine(@" \_________________________________________________________________________________________________________\|");
+                Console.CursorTop -= 3;
+                Console.CursorLeft = center + 2;
+                string writeFileName = Console.ReadLine();
+                if (String.IsNullOrEmpty(writeFileName))
                 {
-                    Console.ForegroundColor = msgBoxTxt;
-                    Console.BackgroundColor = msgBoxBkgrd;
-                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
-                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+\ ");
-                    Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name of the config file to be created. .sls will be appended to the end of the file name | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|                                                                                                         | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------------------------------------+ |");
-                    Console.CursorLeft = center; Console.WriteLine(@" \_________________________________________________________________________________________________________\|");
-                    Console.CursorTop -= 3;
-                    Console.CursorLeft = center + 2;
-                    string writeFileName = Console.ReadLine();
-                    if (String.IsNullOrEmpty(writeFileName))
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.CursorTop = Console.CursorTop - 1;
+                    Console.CursorLeft = center;
+                    Console.WriteLine("| No file name was entered. Press any key to continue");
+                    Console.ForegroundColor = fieldConsoleTxtClr;
+                    Console.CursorVisible = true;
+                    Console.ReadKey(true);
+                    Console.CursorTop -= 4;
+                }
+                else
+                {
+                    writeFileName = writeFileName + ".sls";
+                    try
                     {
-                        Console.ForegroundColor = ConsoleColor.White;
-                        Console.CursorTop = Console.CursorTop - 1;
-                        Console.CursorLeft = center;
-                        Console.WriteLine("| No file name was entered. Press any key to continue");
-                        Console.ForegroundColor = fieldConsoleTxtClr;
-                        Console.CursorVisible = true;
-                        Console.ReadKey(true);
-                        Console.CursorTop -= 4;
+                        // Attempt to open output file.
+                        StreamWriter flowConfigFileWriter = new StreamWriter(writeFileName);
+                        flowConfigFileWriter.WriteLine(splunkUrl);
+                        flowConfigFileWriter.WriteLine(searchStrg);
+                        flowConfigFileWriter.WriteLine(earliest);
+                        flowConfigFileWriter.WriteLine(latest);
+                        flowConfigFileWriter.Close();
                     }
-                    else
+                    catch (IOException e)
                     {
-                        writeFileName = writeFileName + ".sls";
-                        try
-                        {
-                            // Attempt to open output file.
-                            StreamWriter flowConfigFileWriter = new StreamWriter(writeFileName);
-                            flowConfigFileWriter.WriteLine(splunkUrl);
-                            flowConfigFileWriter.WriteLine(searchStrg);
-                            flowConfigFileWriter.WriteLine(earliest);
-                            flowConfigFileWriter.WriteLine(latest);
-                            flowConfigFileWriter.Close();
-                        }
-                        catch (IOException e)
-                        {
-                            TextWriter errorWriter = Console.Error;
-                            errorWriter.WriteLine(e.Message);
-                        }
-                        if (SplunkReadDone) { SortCalls(); }
-                        Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
-                        Console.ForegroundColor = fieldConsoleTxtClr;
-                        CallListPosition = 0;
-                        CallDisplay(true);
-                        Console.SetWindowPosition(0, 0);
-                        Console.SetCursorPosition(0, 4);
-
+                        TextWriter errorWriter = Console.Error;
+                        errorWriter.WriteLine(e.Message);
                     }
+                    if (SplunkReadDone) { SortCalls(); }
+                    Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
+                    Console.ForegroundColor = fieldConsoleTxtClr;
+                    CallListPosition = 0;
+                    CallDisplay(true);
+                    Console.SetWindowPosition(0, 0);
+                    Console.SetCursorPosition(0, 4);
                 }
             }
             if (keypressed.Key == ConsoleKey.F)
             {
-                lock (_locker)
+                lock (_DisplayLocker)
                 {
                     filterChange = true;
                     Console.ForegroundColor = msgBoxTxt;
@@ -1175,7 +1161,7 @@ public class SipSplunk
             if (keypressed.Key == ConsoleKey.N)
             {
                 CallListPosition = 0;
-                if (showNotify == false) { showNotify = true; } else { showNotify = false; }
+                lock (_DisplayLocker) if (showNotify == false) { showNotify = true; } else { showNotify = false; }
                 filterChange = true;
                 CallFilter();
                 if (SplunkReadDone) { SortCalls(); }
@@ -1184,7 +1170,7 @@ public class SipSplunk
             }
             if (keypressed.Key == ConsoleKey.O)
             {
-                lock (_locker)
+                lock (_DisplayLocker)
                 {
                     Console.ForegroundColor = msgBoxTxt;
                     Console.BackgroundColor = msgBoxBkgrd;
@@ -1226,7 +1212,7 @@ public class SipSplunk
             {
                 string prevMethod = methodDisplayed;
                 filterChange = true;
-                methodDisplayed = "register";
+                lock (_DisplayLocker) methodDisplayed = "register";
                 ClearSelectedCalls();
                 numSelectedCalls = 0;
                 CallListPosition = 0;
@@ -1242,7 +1228,7 @@ public class SipSplunk
                 filterChange = true;
                 ClearSelectedCalls();
                 numSelectedCalls = 0;
-                methodDisplayed = "subscribe";
+                lock (_DisplayLocker) methodDisplayed = "subscribe";
                 CallListPosition = 0;
                 CallFilter();
                 if (SplunkReadDone) { SortCalls(); }
@@ -1254,7 +1240,7 @@ public class SipSplunk
             {
                 string prevMethod = methodDisplayed;
                 filterChange = true;
-                methodDisplayed = "invite";
+                lock (_DisplayLocker) methodDisplayed = "invite";
                 numSelectedCalls = 0;
                 ClearSelectedCalls();
                 CallListPosition = 0;
@@ -1297,7 +1283,7 @@ public class SipSplunk
     {
         if (callsDisplaysortIdx == 0)
         {
-            callLegsDisplayed = callLegsDisplayed.OrderBy(theDate => theDate[0]).ThenBy(Time => Time[1]).ToList();
+            callLegsDisplayed = callLegsDisplayed.OrderBy(UTC => UTC[1]).ToList();
             CallListPosition = 0;
         }
         else
@@ -1317,35 +1303,32 @@ public class SipSplunk
 
     void SelectMessages()
     {
-        lock (_locker)
+        selectedmessages.Clear();
+        lock (_DataLocker) for (int i = 0; i < messages.Count; i++)                //find messages that contain the selected callid
         {
-            selectedmessages.Clear();
-            for (int i = 0; i < messages.Count; i++)                //find messages that contain the selected callid
+            if (callIDsOfIntrest.Contains(messages[i][6]))
             {
-                if (callIDsOfIntrest.Contains(messages[i][6]))
+                if (messages[i][3] != messages[i][4])
                 {
-                    if (messages[i][3] != messages[i][4])
-                    {
-                        selectedmessages.Add(messages[i]);
-                    }
-                    else if (dupIP)
-                    {
-                        selectedmessages.Add(messages[i]);
-                    }
+                    selectedmessages.Add(messages[i]);
+                }
+                else if (dupIP)
+                {
+                    selectedmessages.Add(messages[i]);
                 }
             }
-            CallLegColors callcolor = CallLegColors.Green;
-            foreach (string cid in callIDsOfIntrest)                         //get all the messages with the callIDs fro tmhe selected call Legs
+        }
+        CallLegColors callcolor = CallLegColors.Green;
+        lock (_DataLocker) foreach (string cid in callIDsOfIntrest)                         //get all the messages with the callIDs fro tmhe selected call Legs
+        {
+            for (int i = 0; i < selectedmessages.Count; i++)
             {
-                for (int i = 0; i < selectedmessages.Count; i++)
+                if (cid == selectedmessages[i][6])
                 {
-                    if (cid == selectedmessages[i][6])
-                    {
-                        selectedmessages[i][10] = callcolor.ToString();     //set color to display the call leg in the flow color for each call id
-                    }
+                    selectedmessages[i][10] = callcolor.ToString();     //set color to display the call leg in the flow color for each call id
                 }
-                if (callcolor == CallLegColors.DarkMagenta) { callcolor = CallLegColors.Green; } else { callcolor++; }
             }
+            if (callcolor == CallLegColors.DarkMagenta) { callcolor = CallLegColors.Green; } else { callcolor++; }
         }
     }
 
@@ -1371,75 +1354,72 @@ public class SipSplunk
 
     void Flow(bool liveUpdate)
     {
-        lock (_locker)
+        SelectMessages();
+        GetIps();              //get the IP addresses of the selected SIP messages for the top of the screen  and addedto the IPsOfIntrest 
+        if (liveUpdate && selectedmessages.Count > prevNumSelectMsg && IPsOfIntrest.Count == prevNumSelectdIPs)         //IF 
         {
-            SelectMessages();
-            GetIps();              //get the IP addresses of the selected SIP messages for the top of the screen  and addedto the IPsOfIntrest 
-            if (liveUpdate && selectedmessages.Count > prevNumSelectMsg && IPsOfIntrest.Count == prevNumSelectdIPs)         //IF 
+            if (selectedmessages.Count > Console.BufferHeight)
             {
-                if (selectedmessages.Count > Console.BufferHeight)
-                {
-                    Console.BufferHeight = Math.Max(Math.Min(10 + selectedmessages.Count, Int16.MaxValue - 1), Console.BufferHeight);
-                }
-                for (int i = prevNumSelectMsg; i < selectedmessages.Count; i++)
-                {
-                    fakeCursor[0] = 0; fakeCursor[1] = i + 4;
-                    WriteMessageLine(selectedmessages[i], false);
-                    WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                }
-                prevNumSelectMsg = selectedmessages.Count;
+                Console.BufferHeight = Math.Max(Math.Min(10 + selectedmessages.Count, Int16.MaxValue - 1), Console.BufferHeight);
             }
-            else
+            for (int i = prevNumSelectMsg; i < selectedmessages.Count; i++)
             {
-                prevNumSelectMsg = selectedmessages.Count;
-                prevNumSelectdIPs = IPsOfIntrest.Count;
-                Console.BackgroundColor = fieldConsoleBkgrdClr;
-                Console.ForegroundColor = fieldConsoleTxtClr;
-                if (!liveUpdate) { ClearConsoleNoTop(); }
-                Console.SetCursorPosition(0, 1);
-                fakeCursor[0] = 0; fakeCursor[1] = 1;
-                if (selectedmessages.Count > Console.BufferHeight)
-                {
-                    Console.BufferHeight = Math.Max(Math.Min(10 + selectedmessages.Count, Int16.MaxValue - 1), Console.BufferHeight);
-                }
-                flowWidth = 24;
-                WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                foreach (string ip in IPsOfIntrest)
-                {
-                    flowWidth = flowWidth + 29;
-                    if (flowWidth > Console.BufferWidth)
-                    {
-                        Console.BufferWidth = Math.Min(15 + flowWidth, Int16.MaxValue - 1);
-                    }
-                    WriteConsole(ip + new String(' ', 29 - ip.Length), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                }
-                WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
-                WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                foreach (string ip in IPsOfIntrest)
-                {
-                    string ua = "";
-                    foreach (string[] ary in selectedmessages)
-                    {
-                        if (ary[3] == ip && ary[16] != null)
-                        {
-                            ua = ary[16].Substring(0, Math.Min(15, ary[16].Length));
-                            break;
-                        }
-                    }
-                    WriteConsole(ua + new String(' ', 29 - ua.Length), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                }
-                WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
+                fakeCursor[0] = 0; fakeCursor[1] = i + 4;
+                WriteMessageLine(selectedmessages[i], false);
                 WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                foreach (string[] msg in selectedmessages)
-                {
-                    WriteMessageLine(msg, false);
-                }
-                WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
-                if (flowSelectPosition > 17) { Console.SetWindowPosition(0, 0); }
-                Console.SetCursorPosition(0, flowSelectPosition + 4);
-                MessageLine(selectedmessages[flowSelectPosition], true);
-                Console.CursorTop -= 1;
             }
+            prevNumSelectMsg = selectedmessages.Count;
+        }
+        else
+        {
+            prevNumSelectMsg = selectedmessages.Count;
+            prevNumSelectdIPs = IPsOfIntrest.Count;
+            Console.BackgroundColor = fieldConsoleBkgrdClr;
+            Console.ForegroundColor = fieldConsoleTxtClr;
+            if (!liveUpdate) { ClearConsoleNoTop(); }
+            Console.SetCursorPosition(0, 1);
+            fakeCursor[0] = 0; fakeCursor[1] = 1;
+            if (selectedmessages.Count > Console.BufferHeight)
+            {
+                Console.BufferHeight = Math.Max(Math.Min(10 + selectedmessages.Count, Int16.MaxValue - 1), Console.BufferHeight);
+            }
+            flowWidth = 24;
+            WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            foreach (string ip in IPsOfIntrest)
+            {
+                flowWidth = flowWidth + 29;
+                if (flowWidth > Console.BufferWidth)
+                {
+                    Console.BufferWidth = Math.Min(15 + flowWidth, Int16.MaxValue - 1);
+                }
+                WriteConsole(ip + new String(' ', 29 - ip.Length), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            }
+            WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
+            WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            foreach (string ip in IPsOfIntrest)
+            {
+                string ua = "";
+                foreach (string[] ary in selectedmessages)
+                {
+                    if (ary[3] == ip && ary[16] != null)
+                    {
+                        ua = ary[16].Substring(0, Math.Min(15, ary[16].Length));
+                        break;
+                    }
+                }
+                WriteConsole(ua + new String(' ', 29 - ua.Length), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            }
+            WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
+            WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            foreach (string[] msg in selectedmessages)
+            {
+                WriteMessageLine(msg, false);
+            }
+            WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            if (flowSelectPosition > 17) { Console.SetWindowPosition(0, 0); }
+            Console.SetCursorPosition(0, flowSelectPosition + 4);
+            MessageLine(selectedmessages[flowSelectPosition], true);
+            Console.CursorTop -= 1;
         }
     }
 
@@ -1469,7 +1449,7 @@ public class SipSplunk
                     Console.BackgroundColor = fieldConsoleBkgrdClr;
                     Console.ForegroundColor = fieldConsoleTxtClr;
                 }
-                Console.Write("{0,-10} {1,-12}", message[1], message[2].Substring(0, 11));
+                Console.Write("{0,-10}", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
                 Console.ForegroundColor = (ConsoleColor)Enum.Parse(typeof(ConsoleColor), message[10]);
                 Console.Write(displayedline + "<-");
                 if (invert)
@@ -1502,7 +1482,7 @@ public class SipSplunk
                     Console.BackgroundColor = fieldConsoleBkgrdClr;
                     Console.ForegroundColor = fieldConsoleTxtClr;
                 }
-                Console.Write("{0,-10} {1,-12}|", message[1], message[2].Substring(0, 11));
+                Console.Write("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
                 for (int i = 0; i < srcindx - 1; i++)
                 {
                     Console.Write(space);
@@ -1555,7 +1535,7 @@ public class SipSplunk
                 Console.BackgroundColor = fieldConsoleBkgrdClr;
                 Console.ForegroundColor = fieldConsoleTxtClr;
             }
-            Console.Write("{0,-10} {1,-12}|", message[1], message[2].Substring(0, 11));
+            Console.Write("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
             for (int i = 0; i < lowindx; i++)
             {
                 Console.Write(space);
@@ -1625,7 +1605,7 @@ public class SipSplunk
                     TxtColor = fieldAttrTxtClr;
                     BkgrdColor = fieldAttrBkgrdClr;
                 }
-                string formatedStr = String.Format("{0,-10} {1,-12}", message[1], message[2].Substring(0, 11));
+                string formatedStr = String.Format("{0,-10}", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
                 WriteConsole(formatedStr, TxtColor, BkgrdColor);
                 CallTxtColor = (AttrColor)Enum.Parse(typeof(AttrColor), message[10]);
                 if (htmlFlowToFile)
@@ -1657,7 +1637,7 @@ public class SipSplunk
                     TxtColor = fieldAttrTxtClr;
                     BkgrdColor = fieldAttrBkgrdClr;
                 }
-                string formatedStr = String.Format("{0,-10} {1,-12}|", message[1], message[2].Substring(0, 11));
+                string formatedStr = String.Format("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
                 WriteConsole(formatedStr, TxtColor, BkgrdColor);
                 for (int i = 0; i < srcindx - 1; i++)
                 {
@@ -1709,7 +1689,7 @@ public class SipSplunk
                 TxtColor = fieldAttrTxtClr;
                 BkgrdColor = fieldAttrBkgrdClr;
             }
-            string formatedStr = String.Format("{0,-10} {1,-12}|", message[1], message[2].Substring(0, 11));
+            string formatedStr = String.Format("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
             WriteConsole(formatedStr, TxtColor, BkgrdColor);
             for (int i = 0; i < lowindx; i++)
             {
@@ -1852,110 +1832,107 @@ public class SipSplunk
                 Flow(false);  //display call flow Diagram
             }
             else if (keypress.Key == ConsoleKey.O)
-            {
-                lock (_locker)
+            { 
+                Console.ForegroundColor = msgBoxTxt;
+                Console.BackgroundColor = msgBoxBkgrd;
+                int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
+                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------+\ ");
+                Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name to the data will be writen to (.html for html output) | |");
+                Console.CursorLeft = center; Console.WriteLine(@"|                                                                           | |");
+                Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------+ |");
+                Console.CursorLeft = center; Console.WriteLine(@" \___________________________________________________________________________\|");
+                Console.CursorTop -= 3;
+                Console.CursorLeft = center + 2;
+                string writeFileName = Console.ReadLine();
+                if (String.IsNullOrEmpty(writeFileName))
                 {
-                    Console.ForegroundColor = msgBoxTxt;
-                    Console.BackgroundColor = msgBoxBkgrd;
-                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 136) / 2)));
-                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------+\ ");
-                    Console.CursorLeft = center; Console.WriteLine(@"| Enter the file name to the data will be writen to (.html for html output) | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|                                                                           | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"+---------------------------------------------------------------------------+ |");
-                    Console.CursorLeft = center; Console.WriteLine(@" \___________________________________________________________________________\|");
-                    Console.CursorTop -= 3;
-                    Console.CursorLeft = center + 2;
-                    string writeFileName = Console.ReadLine();
-                    if (String.IsNullOrEmpty(writeFileName))
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.CursorTop = Console.CursorTop - 1;
+                    Console.CursorLeft = center;
+                    Console.WriteLine("| No file name was entered. Press any key to continue");
+                    Console.ForegroundColor = fieldConsoleTxtClr;
+                    Console.CursorVisible = true;
+                    Console.ReadKey(true);
+                    Console.CursorTop -= 4;
+                }
+                else
+                {
+                    if (Regex.IsMatch(writeFileName, @"^.*\.html$")) { htmlFlowToFile = true; }
+                    try
                     {
-                        Console.ForegroundColor = ConsoleColor.White;
-                        Console.CursorTop = Console.CursorTop - 1;
-                        Console.CursorLeft = center;
-                        Console.WriteLine("| No file name was entered. Press any key to continue");
-                        Console.ForegroundColor = fieldConsoleTxtClr;
-                        Console.CursorVisible = true;
-                        Console.ReadKey(true);
-                        Console.CursorTop -= 4;
+                        // Attempt to open output file.
+                        flowFileWriter = new StreamWriter(writeFileName);
                     }
-                    else
+                    catch (IOException e)
                     {
-                        if (Regex.IsMatch(writeFileName, @"^.*\.html$")) { htmlFlowToFile = true; }
-                        try
-                        {
-                            // Attempt to open output file.
-                            flowFileWriter = new StreamWriter(writeFileName);
-                        }
-                        catch (IOException e)
-                        {
-                            TextWriter errorWriter = Console.Error;
-                            errorWriter.WriteLine(e.Message);
-                        }
-                        writeFlowToFile = true;
+                        TextWriter errorWriter = Console.Error;
+                        errorWriter.WriteLine(e.Message);
+                    }
+                    writeFlowToFile = true;
+                    if (htmlFlowToFile)
+                    {
+                        flowFileWriter.WriteLine("<!DOCTYPE html>");
+                        flowFileWriter.WriteLine("<html>");
+                        flowFileWriter.WriteLine("<head>");
+                        flowFileWriter.WriteLine("<style> a:link {text-decoration: none} </style>");
+                        flowFileWriter.WriteLine("<font face=\"Courier\" >");
+                        flowFileWriter.WriteLine("</head>");
+                        flowFileWriter.WriteLine("<body>");
+                        flowFileWriter.WriteLine("<pre>");
+                    }
+                    Flow(false);  //display call flow Diagram
+                    flowFileWriter.WriteLine(" ");
+                    flowFileWriter.WriteLine(" ");
+                    Console.SetCursorPosition(0, 1);
+                    Console.SetWindowPosition(0, 0);
+
+                    //cycle through all the seleted msg 
+                    for (int i = 0; i < selectedmessages.Count; i++)
+                    {
+                        string line = "";
+                        Console.WriteLine();
                         if (htmlFlowToFile)
                         {
-                            flowFileWriter.WriteLine("<!DOCTYPE html>");
-                            flowFileWriter.WriteLine("<html>");
-                            flowFileWriter.WriteLine("<head>");
-                            flowFileWriter.WriteLine("<style> a:link {text-decoration: none} </style>");
-                            flowFileWriter.WriteLine("<font face=\"Courier\" >");
-                            flowFileWriter.WriteLine("</head>");
-                            flowFileWriter.WriteLine("<body>");
-                            flowFileWriter.WriteLine("<pre>");
+                            // html tag to link to by msg start index number
+                            flowFileWriter.Write("<a name = \"" + selectedmessages[i][0] + "\">");
+                            flowFileWriter.WriteLine(WebUtility.HtmlEncode(line));
                         }
-                        Flow(false);  //display call flow Diagram
-                        flowFileWriter.WriteLine(" ");
-                        flowFileWriter.WriteLine(" ");
-                        Console.SetCursorPosition(0, 1);
-                        Console.SetWindowPosition(0, 0);
-
-                        //cycle through all the seleted msg 
-                        for (int i = 0; i < selectedmessages.Count; i++)
+                        else
                         {
-                            string line = "";
-                            Console.WriteLine();
+                            flowFileWriter.WriteLine(line);
+                        }
+                        // from read streamData to write file line of message to end index
+                        for (int j = Int32.Parse(selectedmessages[i][0]); j < Int32.Parse(selectedmessages[i][9]) - 1; j++)
+                        {
                             if (htmlFlowToFile)
                             {
-                                // html tag to link to by msg start index number
-                                flowFileWriter.Write("<a name = \"" + selectedmessages[i][0] + "\">");
-                                flowFileWriter.WriteLine(WebUtility.HtmlEncode(line));
+                                flowFileWriter.WriteLine(WebUtility.HtmlEncode(streamData[j]));
                             }
                             else
                             {
-                                flowFileWriter.WriteLine(line);
-                            }
-                            // from read streamData to write file line of message to end index
-                            for (int j = Int32.Parse(selectedmessages[i][0]); j < Int32.Parse(selectedmessages[i][9]) - 1; j++)
-                            {
-                                if (htmlFlowToFile)
-                                {
-                                    flowFileWriter.WriteLine(WebUtility.HtmlEncode(streamData[j]));
-                                }
-                                else
-                                {
-                                    flowFileWriter.WriteLine(streamData[j]);
-                                }
-                            }
-                            if (htmlFlowToFile)
-                            {
-                                flowFileWriter.Write("</a>");
-                                flowFileWriter.Write("<a href= \"#flow" + selectedmessages[i][0] + "\">Back</a>");
-                                flowFileWriter.WriteLine("</br>");
-                                flowFileWriter.WriteLine("<hr>");
-                                flowFileWriter.WriteLine("</br>");
+                                flowFileWriter.WriteLine(streamData[j]);
                             }
                         }
                         if (htmlFlowToFile)
                         {
-                            flowFileWriter.WriteLine("</pre>");
-                            flowFileWriter.WriteLine("</body>");
-                            flowFileWriter.WriteLine("</html>");
+                            flowFileWriter.Write("</a>");
+                            flowFileWriter.Write("<a href= \"#flow" + selectedmessages[i][0] + "\">Back</a>");
+                            flowFileWriter.WriteLine("</br>");
+                            flowFileWriter.WriteLine("<hr>");
+                            flowFileWriter.WriteLine("</br>");
                         }
-                        htmlFlowToFile = false;
-                        writeFlowToFile = false;
-                        flowFileWriter.Close();
                     }
-                    Flow(false);  //display call flow Diagram
+                    if (htmlFlowToFile)
+                    {
+                        flowFileWriter.WriteLine("</pre>");
+                        flowFileWriter.WriteLine("</body>");
+                        flowFileWriter.WriteLine("</html>");
+                    }
+                    htmlFlowToFile = false;
+                    writeFlowToFile = false;
+                    flowFileWriter.Close();
                 }
+                Flow(false);  //display call flow Diagram
             }
         }
         return;
@@ -2049,7 +2026,7 @@ public class SipSplunk
         else
         {
             Regex regexinput = new Regex(strginput);
-            for (int i = 0; i < Math.Min(messages.Count, Int16.MaxValue - 2); i++)
+            lock (_DataLocker) for (int i = 0; i < Math.Min(messages.Count, Int16.MaxValue - 2); i++)
             {
                 string[] ary = messages[i];
                 if (regexinput.IsMatch(string.Join(" ", ary)))
@@ -2192,8 +2169,11 @@ public class SipSplunk
         {
             displayLine = line;
         }
-        ConsoleBuffer.SetAttribute(x, 0, line.Length, (short)(statusBarTxtClr + (short)(((short)statusBarBkgrdClr) * 16)));
-        ConsoleBuffer.WriteAt(x, 0, displayLine);
+        lock (_DisplayLocker)
+        {
+            ConsoleBuffer.SetAttribute(x, 0, line.Length, (short)(statusBarTxtClr + (short)(((short)statusBarBkgrdClr) * 16)));
+            ConsoleBuffer.WriteAt(x, 0, displayLine);
+        }
     }
 
     void WriteScreen(string line, short x, short y, AttrColor attr, AttrColor bkgrd)
