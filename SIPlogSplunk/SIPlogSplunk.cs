@@ -142,6 +142,8 @@ public class SipSplunk
     int flowWidth;
     string methodDisplayed;
     string displayMode;
+    enum TZmode { local,utc,stamp };
+    TZmode timeMode;
     bool showNotify;
     int CallListPosition;
     int callsDisplaysortIdx;
@@ -222,6 +224,7 @@ public class SipSplunk
         writeFlowToFile = false;
         htmlFlowToFile = false;
         splunkExceptions = false;
+        timeMode = TZmode.local;
     }
 
     static void Main(String[] arg)
@@ -291,7 +294,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk API URL ex. https://127.0.0.1:8089/  :");
+                    Console.Write("Enter Splunk API URL ex. https://127.0.0.1:8089/ : ");
                     SipSplunkObj.splunkUrl = Console.ReadLine();
                     if (SipSplunkObj.splunkUrl.StartsWith("https://")) { goodentry = true; }
                 }
@@ -301,7 +304,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk user  :");
+                    Console.Write("Enter Splunk user : ");
                     SipSplunkObj.user = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.user)) { goodentry = true; }
                 }
@@ -311,7 +314,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk user " + SipSplunkObj.user + " password  :");
+                    Console.Write("Enter Splunk user " + SipSplunkObj.user + " password : ");
                     SipSplunkObj.password = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.password)) { goodentry = true; }
 
@@ -322,7 +325,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk search string. Must contain \"index=\"  :");
+                    Console.Write("Enter Splunk search string. Must contain \"index=\" : ");
                     SipSplunkObj.searchStrg = Console.ReadLine();
                     if (SipSplunkObj.searchStrg.Contains("index=")) { goodentry = true; }
                 }
@@ -332,7 +335,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter search begining time ex. 2018-02-6T06:00:00.000-05:00  :");
+                    Console.Write("Enter search begining time ex. 2018-02-6T06:00:00.000-05:00 : ");
                     SipSplunkObj.earliest = Console.ReadLine();
                     if (timeAndDateRGX.IsMatch(SipSplunkObj.earliest)) { goodentry = true; }
                 }
@@ -342,7 +345,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter search end time ex. 2018-02-6T06:00:00.000-05:00  :");
+                    Console.Write("Enter search end time ex. 2018-02-6T06:00:00.000-05:00 : ");
                     SipSplunkObj.latest = Console.ReadLine();
                     if (timeAndDateRGX.IsMatch(SipSplunkObj.latest)) { goodentry = true; }
                 }
@@ -592,11 +595,30 @@ public class SipSplunk
                                 {
                                     lock (_DataLocker) callLegs.Add(arrayout);  //callLegs touched by another thread
                                     lock (_DisplayLocker) if (displayMode == "calls") // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread
+                                    {
+                                        if (arrayout[9] == methodDisplayed || (showNotify && arrayout[9] == "notify"))
                                         {
-                                        if (arrayout[9] == methodDisplayed || (showNotify && arrayout[9] == "notify")) 
-                                        {   
-                                            CallFilter();
-                                            CallDisplay(false);
+                                            if (string.IsNullOrEmpty(filter[0]))
+                                            {
+                                                CallFilter();
+                                                CallDisplay(false);
+                                            }
+                                            else
+                                            {
+                                                bool arrayContainsFilteredItem = false;
+                                                foreach (String filteritem in filter)
+                                                {
+                                                    if (arrayout.Contains(filteritem))
+                                                    {
+                                                        arrayContainsFilteredItem = true;
+                                                    }
+                                                }
+                                                if (arrayContainsFilteredItem)
+                                                {
+                                                    CallFilter();
+                                                    CallDisplay(false);
+                                                }
+                                            }
                                         }
                                     }
                                 }                                
@@ -639,13 +661,34 @@ public class SipSplunk
             }
             else
             {
+                string timeString = "";
+                switch (timeMode)
+                {
+                    case TZmode.local:
+                        {
+                            timeString = "Local Time";
+                            
+                            break;
+                        }
+                    case TZmode.utc:
+                        {
+                            timeString = "UTC Time";
+                            break;
+                        }
+                    case TZmode.stamp:
+                        {
+                            timeString = "Time Stamp";
+                            break;
+                        }
+                }
+                sortFields[0, 0] = timeString;
                 filterChange = false;
                 callLegsDisplayedCountPrev = callLegsDisplayed.Count;
                 ClearConsoleNoTop();
                 fakeCursor[0] = 0; fakeCursor[1] = 1;
                 WriteConsole("[Spacebar]-select calls [Enter]-for call flow [Q]-query splunk again [F]-filter [H]-help [Esc]-quit", headerTxtClr, headerBkgrdClr);
                 WriteLineConsole(" ", headerTxtClr, headerBkgrdClr);
-                String formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {4,-30} {5,-30} {6,-16} {7,-16}", "*", "index", "date", "time", "from:", "to:", "src IP", "dst IP");
+                String formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {4,-30} {5,-30} {6,-16} {7,-16}", "*", "Index", "Date", timeString, "From:", "To:", "Src IP", "Dst IP");
                 WriteLineConsole(formatedStr, headerTxtClr, headerBkgrdClr);
                 if (methodDisplayed == "invite") { WriteConsole("----invites/calls---", headerTxtClr, headerBkgrdClr); }
                 if (methodDisplayed == "register") { WriteConsole("----registrations---", headerTxtClr, headerBkgrdClr); }
@@ -658,6 +701,7 @@ public class SipSplunk
                         WriteScreenCallLine(callLegsDisplayed[i], i);
                     }
                 }
+                
                 WriteScreen(sortFields[callsDisplaysortIdx, 0], Int16.Parse(sortFields[callsDisplaysortIdx, 1]), 2, sortTxtdClr, sortBkgrdClr);
             }
             string footerOne = "Number of SIP messages found : " + messages.Count.ToString();
@@ -687,15 +731,38 @@ public class SipSplunk
             {
                 Console.ForegroundColor = fieldConsoleSelectClr;
             }
+            string dateString ="";
+            string timeString ="";
+            switch (timeMode)
+            {
+                case TZmode.local:
+                    {
+                        dateString = DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break;
+                    }
+                case TZmode.utc:
+                    {
+                        dateString = DateTime.Parse(InputCallLegs[1]).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(InputCallLegs[1]).ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break; 
+                    }
+                case TZmode.stamp:
+                    {
+                        dateString = DateTime.Parse(InputCallLegs[0]).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(InputCallLegs[0]).ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break;
+                    }
+            }
             Console.WriteLine("{0,-2} {1,-6} {2,-10} {3,-12} {5,-30} {4,-30} {6,-16} {7,-17}"
-                , InputCallLegs[5]
-                , indx
-                , DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)   //date
-                , (DateTime.Parse(InputCallLegs[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture)) ?? String.Empty
-                , InputCallLegs[2]
-                , InputCallLegs[3]
-                , InputCallLegs[6]
-                , InputCallLegs[7]);
+            , InputCallLegs[5]
+            , indx
+            , dateString
+            , timeString
+            , InputCallLegs[2]
+            , InputCallLegs[3]
+            , InputCallLegs[6]
+            , InputCallLegs[7]);
             Console.ForegroundColor = fieldConsoleTxtClr;
         }
     }
@@ -733,11 +800,34 @@ public class SipSplunk
                     bkgrdColor = fieldAttrBkgrdClr;
                 }
             }
+            string dateString = "";
+            string timeString = "";
+            switch (timeMode)
+            {
+                case TZmode.local:
+                    {
+                        dateString = DateTime.Parse(callLeg[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(callLeg[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break;
+                    }
+                case TZmode.utc:
+                    {
+                        dateString = DateTime.Parse(callLeg[1]).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(callLeg[1]).ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break;
+                    }
+                case TZmode.stamp:
+                    {
+                        dateString = DateTime.Parse(callLeg[0]).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                        timeString = DateTime.Parse(callLeg[0]).ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                        break;
+                    }
+            }
             string formatedStr = String.Format("{0,-2} {1,-6} {2,-10} {3,-12} {5,-30} {4,-30} {6,-16} {7,-17}"
                 , callLeg[5]
                 , indx
-                , DateTime.Parse(callLeg[1]).ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)   //date
-                , (DateTime.Parse(callLeg[1]).ToLocalTime().ToString("HH:mm:ss.ff", CultureInfo.InvariantCulture)) ?? String.Empty
+                , dateString
+                , timeString
                 , callLeg[2]
                 , callLeg[3]
                 , callLeg[6]
@@ -979,28 +1069,29 @@ public class SipSplunk
                 {
                     Console.ForegroundColor = msgBoxTxt;
                     Console.BackgroundColor = msgBoxBkgrd;
-                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 57) / 2)));
-                    Console.CursorLeft = center; Console.WriteLine(@"+-----------------------------------------------------+\ ");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Key                                                | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Down Arrow / Page Down ---------- move cursor down | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Up Arrow / Page Up ---------------- move cursor up | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Spacebar ---------------------- select call leg(s) | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Enter ------------------ Show diagram of call flow | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Esc ------------------------- Exit the application | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  H ------------------------------- This help dialog | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  M ------------------------ Search all SIP messages | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Q ----------------------------- Query splunk again | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  C ----------------------- Write configuration file | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  F --------------------- Filter the displayed calls | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  N ---------------------- Toggle display of NOTIFYs | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  O ----- Search Option Messages and 200 OK response | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  R ----------------------------- Show registrations | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  S ---------------------------- Show subscritptions | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  I ------------------------ Show calls with INTIVES | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|  Left Arrow / Right Arrow ------- change sort order | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"|                                                     | |");
-                    Console.CursorLeft = center; Console.WriteLine(@"+-----------------------------------------------------+ |");
-                    Console.CursorLeft = center; Console.WriteLine(@" \_____________________________________________________\|");
+                    int center = Math.Max(0, (int)Math.Floor((decimal)((Console.WindowWidth - 71) / 2)));
+                    Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+\ ");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Key                                                              | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Down Arrow / Page Down ------------------------ move cursor down | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Up Arrow / Page Up ------------------------------ move cursor up | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Left Arrow / Right Arrow --------------------- change sort order | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Spacebar ------------------------------------ select call leg(s) | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Enter -------------------------------- Show diagram of call flow | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Esc --------------------------------------- Exit the application | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  H --------------------------------------------- This help dialog | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  M -------------------------------------- Search all SIP messages | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  Q ------------------------------------------- Query splunk again | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  C ------------------------------------- Write configuration file | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  F ----------------------------------- Filter the displayed calls | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  N ------------------------------------ Toggle display of NOTIFYs | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  O ------------------- Search Option Messages and 200 OK response | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  R ------------------------------------------- Show registrations | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  S ------------------------------------------ Show subscritptions | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  I -------------------------------------- Show calls with INTIVES | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  T -- Toggle time zone displyed: local, UTC, timestamp of the log | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|                                                                   | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"+-------------------------------------------------------------------+ |");
+                    Console.CursorLeft = center; Console.WriteLine(@" \___________________________________________________________________\|");
                     Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
                     Console.ForegroundColor = fieldConsoleTxtClr;
                     Console.ReadKey(true);
@@ -1091,13 +1182,23 @@ public class SipSplunk
                     if (!string.IsNullOrEmpty(latestEntry)) { earliest = latestEntry; }
                     if (timeAndDateRGX.IsMatch(latest)) { goodentry = true; }
                 }
+                Array.Clear(filter, 0, filter.Length - 1);
                 streamData.Clear();
+                currentSplunkLoadProg = 0;
                 messages.Clear();
                 callLegs.Clear();
                 callLegsDisplayed.Clear();
                 selectedmessages.Clear();
                 IPsOfIntrest.Clear();
                 callIDsOfIntrest.Clear();
+                CallInvites = 0;
+                notifications = 0;
+                registrations = 0;
+                subscriptions = 0;
+                callLegsDisplayedCountPrev = 0;
+                prevNumSelectdIPs = 0;
+                prevNumSelectMsg = 0;
+                IPprevNumSelectMsg = 0;
                 numSelectedCalls = 0;
                 lock (_QueryAgainlocker)
                 {
@@ -1198,6 +1299,18 @@ public class SipSplunk
                 CallFilter();
                 if (SplunkReadDone) { SortCalls(); }
                 Console.SetWindowPosition(0, Math.Max(0, Console.CursorTop - Console.WindowHeight));
+                CallDisplay(true);
+            }
+            if (keypressed.Key == ConsoleKey.T)
+            {
+                if (timeMode == TZmode.stamp)
+                {
+                    timeMode = TZmode.local;
+                }
+                else
+                {
+                    timeMode++;
+                }                
                 CallDisplay(true);
             }
             if (keypressed.Key == ConsoleKey.O)
@@ -1434,7 +1547,27 @@ public class SipSplunk
                 WriteConsole(ip + new String(' ', 29 - ip.Length), fieldAttrTxtClr, fieldAttrBkgrdClr);
             }
             WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
-            WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            string timeModeString = "";
+            switch (timeMode)
+            {
+                case TZmode.local:
+                    {
+                        timeModeString = "Local Time";
+
+                        break;
+                    }
+                case TZmode.utc:
+                    {
+                        timeModeString = "UTC Time  ";
+                        break;
+                    }
+                case TZmode.stamp:
+                    {
+                        timeModeString = "Time Stamp";
+                        break;
+                    }
+            }
+            WriteConsole(timeModeString + new String(' ', 7), fieldAttrTxtClr, fieldAttrBkgrdClr);
             foreach (string ip in IPsOfIntrest)
             {
                 string ua = "";
@@ -1470,6 +1603,25 @@ public class SipSplunk
         bool isright = false;
         int lowindx = 0;
         int hiindx = 0;
+        string dateTimeString = "";
+        switch (timeMode)
+        {
+            case TZmode.local:
+                {
+                    dateTimeString = DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+            case TZmode.utc:
+                {
+                    dateTimeString = DateTime.Parse(message[2]).ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+            case TZmode.stamp:
+                {
+                    dateTimeString = DateTime.Parse(message[1]).ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+        }
         if (srcindx == dstindx)
         {
             string firstline = message[5].Replace("SIP/2.0 ", "");
@@ -1488,7 +1640,7 @@ public class SipSplunk
                     Console.BackgroundColor = fieldConsoleBkgrdClr;
                     Console.ForegroundColor = fieldConsoleTxtClr;
                 }
-                Console.Write("{0,-10}", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+                Console.Write("{0,-10}", dateTimeString);
                 Console.ForegroundColor = (ConsoleColor)Enum.Parse(typeof(ConsoleColor), message[10]);
                 Console.Write(displayedline + "<-");
                 if (invert)
@@ -1522,7 +1674,7 @@ public class SipSplunk
                     Console.BackgroundColor = fieldConsoleBkgrdClr;
                     Console.ForegroundColor = fieldConsoleTxtClr;
                 }
-                Console.Write("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+                Console.Write("{0,-10}|", dateTimeString);
                 for (int i = 0; i < srcindx - 1; i++)
                 {
                     Console.Write(space);
@@ -1575,7 +1727,7 @@ public class SipSplunk
                 Console.BackgroundColor = fieldConsoleBkgrdClr;
                 Console.ForegroundColor = fieldConsoleTxtClr;
             }
-            Console.Write("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+            Console.Write("{0,-10}|", dateTimeString);
             for (int i = 0; i < lowindx; i++)
             {
                 Console.Write(space);
@@ -1627,6 +1779,25 @@ public class SipSplunk
         bool isright = false;
         int lowindx = 0;
         int hiindx = 0;
+        string dateTimeString = "";
+        switch (timeMode)
+        {
+            case TZmode.local:
+                {
+                    dateTimeString = DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+            case TZmode.utc:
+                {
+                    dateTimeString = DateTime.Parse(message[2]).ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+            case TZmode.stamp:
+                {
+                    dateTimeString = DateTime.Parse(message[1]).ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture);
+                    break;
+                }
+        }
         if (srcindx == dstindx)
         {
             string firstline = message[5].Replace("SIP/2.0 ", "");
@@ -1645,7 +1816,7 @@ public class SipSplunk
                     TxtColor = fieldAttrTxtClr;
                     BkgrdColor = fieldAttrBkgrdClr;
                 }
-                string formatedStr = String.Format("{0,-10}", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+                string formatedStr = String.Format("{0,-10}", dateTimeString);
                 WriteConsole(formatedStr, TxtColor, BkgrdColor);
                 CallTxtColor = (AttrColor)Enum.Parse(typeof(AttrColor), message[10]);
                 if (htmlFlowToFile)
@@ -1678,7 +1849,7 @@ public class SipSplunk
                     TxtColor = fieldAttrTxtClr;
                     BkgrdColor = fieldAttrBkgrdClr;
                 }
-                string formatedStr = String.Format("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+                string formatedStr = String.Format("{0,-10}|", dateTimeString);
                 WriteConsole(formatedStr, TxtColor, BkgrdColor);
                 for (int i = 0; i < srcindx - 1; i++)
                 {
@@ -1730,7 +1901,7 @@ public class SipSplunk
                 TxtColor = fieldAttrTxtClr;
                 BkgrdColor = fieldAttrBkgrdClr;
             }
-            string formatedStr = String.Format("{0,-10}|", DateTime.Parse(message[2]).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.ff", CultureInfo.InvariantCulture));
+            string formatedStr = String.Format("{0,-10}|", dateTimeString);
             WriteConsole(formatedStr, TxtColor, BkgrdColor);
             for (int i = 0; i < lowindx; i++)
             {
@@ -1943,7 +2114,7 @@ public class SipSplunk
                             flowFileWriter.WriteLine(line);
                         }
                         // from read streamData to write file line of message to end index
-                        for (int j = Int32.Parse(selectedmessages[i][0]); j < Int32.Parse(selectedmessages[i][9]) - 1; j++)
+                        for (int j = Int32.Parse(selectedmessages[i][0]) - 1; j < Int32.Parse(selectedmessages[i][9]) - 1; j++)
                         {
                             if (htmlFlowToFile)
                             {
@@ -1992,6 +2163,7 @@ public class SipSplunk
                     Console.CursorLeft = center; Console.WriteLine(@"|  H -------------------------------------- This help dialog | |");
                     Console.CursorLeft = center; Console.WriteLine(@"|  D -- Show SIP messages where  Src and Dst IP are the same | |");
                     Console.CursorLeft = center; Console.WriteLine(@"|  O --------------------------- Write the diagram to a file | |");
+                    Console.CursorLeft = center; Console.WriteLine(@"|  T -------------------------- Toggle local, UTC, timestamp | |");
                     Console.CursorLeft = center; Console.WriteLine(@"|                                                            | |");
                     Console.CursorLeft = center; Console.WriteLine(@"+------------------------------------------------------------+ |");
                     Console.CursorLeft = center; Console.WriteLine(@" \____________________________________________________________\|");
@@ -2000,6 +2172,18 @@ public class SipSplunk
                     Console.ReadKey(true);
                     Flow(false);  //display call flow Diagram
                 }
+            }
+            else if (keypress.Key == ConsoleKey.T)
+            {
+                if (timeMode == TZmode.stamp)
+                {
+                    timeMode = TZmode.local;
+                }
+                else
+                {
+                    timeMode++;
+                }
+                Flow(false);
             }
         }
         return;
