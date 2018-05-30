@@ -11,6 +11,7 @@ using System.Net;
 using Splunk.Client;
 using System.Net.Http;
 using System.Globalization;
+using System.Security;
 
 public class SipSplunk
 {
@@ -154,7 +155,7 @@ public class SipSplunk
     bool htmlFlowToFile;
     string splunkUrl;
     string user;
-    string password;
+    SecureString password;
     string searchStrg;
     string earliest;
     string latest;
@@ -225,6 +226,7 @@ public class SipSplunk
         htmlFlowToFile = false;
         splunkExceptions = false;
         timeMode = TZmode.local;
+        password = new SecureString();
     }
 
     static void Main(String[] arg)
@@ -284,11 +286,14 @@ public class SipSplunk
             SipSplunkObj.user = "admin";
             SipSplunkObj.password = "a1234567";
             SipSplunkObj.searchStrg = "index=siplog";
-            SipSplunkObj.earliest = "2018-01-19T00:00:00.000-05:00";
-            SipSplunkObj.latest = "2018-01-20T00:00:00.000-05:00";
+            //SipSplunkObj.earliest = "2018-01-19T00:00:00.000-05:00";
+            //SipSplunkObj.latest = "2018-01-20T00:00:00.000-05:00";
+            SipSplunkObj.earliest = "-131 days";
+            SipSplunkObj.latest = "-130 days";
             */
-
-            Regex timeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}");
+            
+            Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)",RegexOptions.IgnoreCase);
+            Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now",RegexOptions.IgnoreCase);
             bool goodentry = false;
             if (SipSplunkObj.splunkUrl == null || !SipSplunkObj.splunkUrl.StartsWith("https://"))
             {
@@ -308,18 +313,29 @@ public class SipSplunk
                     SipSplunkObj.user = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.user)) { goodentry = true; }
                 }
-            }
-            goodentry = false;
-            if (String.IsNullOrEmpty(SipSplunkObj.password))
+            }            
+            Console.Write("Enter Splunk user " + SipSplunkObj.user + " password : ");
+            ConsoleKeyInfo key;            
+            do
             {
-                while (!goodentry)
+                key = Console.ReadKey(true);
+                if (key.Key == ConsoleKey.Backspace)
                 {
-                    Console.Write("Enter Splunk user " + SipSplunkObj.user + " password : ");
-                    SipSplunkObj.password = Console.ReadLine();
-                    if (!String.IsNullOrEmpty(SipSplunkObj.password)) { goodentry = true; }
-
+                    if (SipSplunkObj.password.Length > 0)
+                    {
+                        //SipSplunkObj.password = SipSplunkObj.password.Substring(0, (SipSplunkObj.password.Length - 1));
+                        SipSplunkObj.password.RemoveAt(SipSplunkObj.password.Length - 1);
+                        Console.Write("\b \b");
+                    }
                 }
-            }
+                if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
+                {
+                    //SipSplunkObj.password += key.KeyChar;
+                    SipSplunkObj.password.AppendChar(key.KeyChar);
+                    Console.Write("*");
+                }                
+            } while (key.Key != ConsoleKey.Enter);
+            Console.WriteLine();            
             goodentry = false;
             if (String.IsNullOrEmpty(SipSplunkObj.searchStrg) || !SipSplunkObj.searchStrg.Contains("index="))
             {
@@ -331,26 +347,49 @@ public class SipSplunk
                 }
             }
             goodentry = false;
-            if (String.IsNullOrEmpty(SipSplunkObj.earliest) || !timeAndDateRGX.IsMatch(SipSplunkObj.earliest))
+            bool goodTimeEntry = false;
+            while (!goodTimeEntry)
             {
-                while (!goodentry)
+                if (String.IsNullOrEmpty(SipSplunkObj.earliest) || !earliestTimeAndDateRGX.IsMatch(SipSplunkObj.earliest))
                 {
-                    Console.Write("Enter search begining time ex. 2018-02-6T06:00:00.000-05:00 : ");
+                    while (!goodentry)
+                    {
+                    Console.WriteLine("Enter search begining time in format 2018-02-6T06:00:00.000-05:00 or");
+                    Console.Write("relative -2 days or -5h. (s,m,h,d,w,mon,q,y) : ");
                     SipSplunkObj.earliest = Console.ReadLine();
-                    if (timeAndDateRGX.IsMatch(SipSplunkObj.earliest)) { goodentry = true; }
+                    if (earliestTimeAndDateRGX.IsMatch(SipSplunkObj.earliest)) { goodentry = true; }
+                    }
                 }
-            }
-            goodentry = false;
-            if (String.IsNullOrEmpty(SipSplunkObj.latest) || !timeAndDateRGX.IsMatch(SipSplunkObj.latest))
-            {
-                while (!goodentry)
+                goodentry = false;
+                if (String.IsNullOrEmpty(SipSplunkObj.latest) || !latestTimeAndDateRGX.IsMatch(SipSplunkObj.latest))
                 {
-                    Console.Write("Enter search end time ex. 2018-02-6T06:00:00.000-05:00 : ");
+                    while (!goodentry)
+                    {
+                        Console.WriteLine("Enter search end time in format 2018-02-6T06:00:00.000-05:00,");
+                        Console.Write("relative(s,m,h,d,w,mon,q,y) or now : ");
                     SipSplunkObj.latest = Console.ReadLine();
-                    if (timeAndDateRGX.IsMatch(SipSplunkObj.latest)) { goodentry = true; }
+                    if (latestTimeAndDateRGX.IsMatch(SipSplunkObj.latest)) { goodentry = true; }
+                    }
+                }
+                if (Regex.IsMatch(SipSplunkObj.latest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}") && Regex.IsMatch(SipSplunkObj.earliest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}"))
+                {
+                    if (DateTime.Parse(SipSplunkObj.earliest) > DateTime.Parse(SipSplunkObj.latest))
+                    {
+                        Console.Write("start time is later than end time");
+                        SipSplunkObj.earliest = "";
+                        SipSplunkObj.latest = "";
+                    }
+                    else
+                    {
+                        goodTimeEntry = true;
+                    }
+                }
+                else
+                {
+                    goodTimeEntry = true;
                 }
             }
-
+            
             Thread SplunkReadThread = new Thread(() => { SipSplunkObj.SplunkReader(); });
             SplunkReadThread.Name = "Splunk Query/Reader Thread";
             SplunkReadThread.Start();
@@ -392,7 +431,7 @@ public class SipSplunk
                 {
                     SplunkReadDone = false;
                     TopLine("Connecting to splunk", 0);
-                    service.LogOnAsync(user, password).Wait();
+                    service.LogOnAsync(user, SecureStringToString(password)).Wait();
                     TopLine("Getting results from query " + searchStrg, 0);
                     SplunkQuery(service, searchStrg, earliest, latest).Wait();                    
                     if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
@@ -433,37 +472,44 @@ public class SipSplunk
     async Task SplunkQuery(Service service, string searchStrg, string earliest, string latest)
     {
         int delay = 30000;
-        var job = await service.Jobs.CreateAsync("search " + searchStrg + " | reverse", 10000, ExecutionMode.Normal,
+        try
+        {
+            var job = await service.Jobs.CreateAsync("search " + searchStrg + " | reverse", 10000, ExecutionMode.Normal,
             new JobArgs()
             {
                 EarliestTime = earliest, //"2018-02-06T13:25:23.624-05:00"
                 LatestTime = latest, //"2018-02-06T13:25:23.642-05:00"
             });
-        for (int count = 1; ; ++count)
-        {
-            try
+            for (int count = 1; ; ++count)
             {
-                await job.TransitionAsync(DispatchState.Done, delay);
-                break;
-            }
-            catch (TaskCanceledException)
-            {
-                // Consider logging the fact that the operation is taking a long time, around count * (delay / 1000) seconds so far
-                // Also consider stopping the query, if it runs too long
-            }
-            // Consider increasing the delay on each iteration                
-        }
-        using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
-        {
-            using (Stream splunkStream = await message.Content.ReadAsStreamAsync())
-            {
-                splunkSR = new StreamReader(splunkStream);
-                while (!splunkSR.EndOfStream)
+                try
                 {
-                    ReadData();
+                    await job.TransitionAsync(DispatchState.Done, delay);
+                    break;
                 }
-                splunkSR.Close();
+                catch (TaskCanceledException)
+                {
+                    TopLine("Search took too long and timed out", 0);
+                }
+                // Consider increasing the delay on each iteration                
             }
+            using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
+            {
+                using (Stream splunkStream = await message.Content.ReadAsStreamAsync())
+                {
+                    splunkSR = new StreamReader(splunkStream);
+                    while (!splunkSR.EndOfStream)
+                    {
+                        ReadData();
+                    }
+                    splunkSR.Close();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.).*").ToString(), 0);
+            splunkExceptions = true;
         }
     }
 
@@ -1134,7 +1180,8 @@ public class SipSplunk
                 Console.ForegroundColor = fieldConsoleTxtClr;
                 Console.SetWindowPosition(0, 0);
                 Console.SetCursorPosition(0, 1);
-                Regex timeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}");
+                Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)", RegexOptions.IgnoreCase);
+                Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now", RegexOptions.IgnoreCase);
                 bool goodentry = false;
                 while (!goodentry)
                 {
@@ -1151,13 +1198,27 @@ public class SipSplunk
                     if (!string.IsNullOrEmpty(userEntry)) { user = userEntry; }
                     if (user != null) { goodentry = true; }
                 }
-                goodentry = false;
-                while (!goodentry)
+                ConsoleKeyInfo key;
+                do
                 {
-                    Console.Write("Enter Splunk user " + user + " password  : ");
-                    password = Console.ReadLine();
-                    if (!string.IsNullOrEmpty(password)) { goodentry = true; }
-                }
+                    key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Backspace)
+                    {
+                        if (password.Length > 0)
+                        {
+                            //SipSplunkObj.password = SipSplunkObj.password.Substring(0, (SipSplunkObj.password.Length - 1));
+                            password.RemoveAt(password.Length - 1);
+                            Console.Write("\b \b");
+                        }
+                    }
+                    if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
+                    {
+                        //SipSplunkObj.password += key.KeyChar;
+                        password.AppendChar(key.KeyChar);
+                        Console.Write("*");
+                    }
+                } while (key.Key != ConsoleKey.Enter);
+                Console.WriteLine();
                 goodentry = false;
                 while (!goodentry)
                 {
@@ -1167,20 +1228,41 @@ public class SipSplunk
                     if (!string.IsNullOrEmpty(searchStrg) || searchStrg.Contains("index=")) { goodentry = true; }
                 }
                 goodentry = false;
-                while (!goodentry)
+                bool goodTimeEntry = false;
+                while (!goodTimeEntry)
                 {
-                    Console.Write("Enter search begining time [{0}]: ", earliest);
-                    string earliestEntry = Console.ReadLine();
-                    if (!string.IsNullOrEmpty(earliestEntry)) { earliest = earliestEntry; }
-                    if (timeAndDateRGX.IsMatch(earliest)) { goodentry = true; }
-                }
-                goodentry = false;
-                while (!goodentry)
-                {
-                    Console.Write("Enter search end time [{0}]: ", latest);
-                    string latestEntry = Console.ReadLine();
-                    if (!string.IsNullOrEmpty(latestEntry)) { earliest = latestEntry; }
-                    if (timeAndDateRGX.IsMatch(latest)) { goodentry = true; }
+                    while (!goodentry)
+                    {
+                        Console.Write("Enter search begining time [{0}]: ", earliest);
+                        string earliestEntry = Console.ReadLine();
+                        if (!string.IsNullOrEmpty(earliestEntry)) { earliest = earliestEntry; }
+                        if (earliestTimeAndDateRGX.IsMatch(earliest)) { goodentry = true; }
+                    }
+                    goodentry = false;
+                    while (!goodentry)
+                    {
+                        Console.Write("Enter search end time [{0}]: ", latest);
+                        string latestEntry = Console.ReadLine();
+                        if (!string.IsNullOrEmpty(latestEntry)) { latest = latestEntry; }
+                        if (latestTimeAndDateRGX.IsMatch(latest)) { goodentry = true; }
+                    }
+                    if (Regex.IsMatch(latest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}") && Regex.IsMatch(earliest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}"))
+                    {
+                        if (DateTime.Parse(earliest) > DateTime.Parse(latest))
+                        {
+                            Console.Write("start time is later than end time");
+                            earliest = "";
+                            latest = "";
+                        }
+                        else
+                        {
+                            goodTimeEntry = true;
+                        }
+                    }
+                    else
+                    {
+                        goodTimeEntry = true;
+                    }
                 }
                 Array.Clear(filter, 0, filter.Length - 1);
                 streamData.Clear();
@@ -2520,6 +2602,20 @@ public class SipSplunk
         }
         fakeCursor = prevFakeCursor;
         writeFlowToFile = iswriteFlowToFileTrue;
+    }
+
+    String SecureStringToString(SecureString value)
+    {
+        IntPtr valuePtr = IntPtr.Zero;
+        try
+        {
+            valuePtr = Marshal.SecureStringToGlobalAllocUnicode(value);
+            return Marshal.PtrToStringUni(valuePtr);
+        }
+        finally
+        {
+            Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
+        }
     }
 }
 
