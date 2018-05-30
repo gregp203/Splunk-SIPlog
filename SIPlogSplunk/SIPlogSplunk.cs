@@ -284,7 +284,7 @@ public class SipSplunk
             /*
             SipSplunkObj.splunkUrl = "https://10.204.140.100:8089/";
             SipSplunkObj.user = "admin";
-            SipSplunkObj.password = "a1234567";
+            
             SipSplunkObj.searchStrg = "index=siplog";
             //SipSplunkObj.earliest = "2018-01-19T00:00:00.000-05:00";
             //SipSplunkObj.latest = "2018-01-20T00:00:00.000-05:00";
