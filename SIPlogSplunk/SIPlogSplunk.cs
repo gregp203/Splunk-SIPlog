@@ -148,6 +148,7 @@ public class SipSplunk
     string earliest;
     string latest;
     bool splunkExceptions;
+    
 
 
     public SipSplunk()
@@ -220,7 +221,7 @@ public class SipSplunk
     {
         try
         {
-            float version = 0.1f;
+            float version = 1.0f;
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
@@ -282,13 +283,13 @@ public class SipSplunk
             Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)",RegexOptions.IgnoreCase);
             Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now",RegexOptions.IgnoreCase);
             bool goodentry = false;
-            if (SipSplunkObj.splunkUrl == null || !SipSplunkObj.splunkUrl.StartsWith("https://"))
+            if (String.IsNullOrEmpty(SipSplunkObj.splunkUrl) || !SipSplunkObj.splunkUrl.StartsWith("https://") || !Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute))
             {
                 while (!goodentry)
                 {
                     Console.Write("Enter Splunk API URL ex. https://127.0.0.1:8089/ : ");
                     SipSplunkObj.splunkUrl = Console.ReadLine();
-                    if (SipSplunkObj.splunkUrl.StartsWith("https://")) { goodentry = true; }
+                    if (!String.IsNullOrEmpty(SipSplunkObj.splunkUrl) && SipSplunkObj.splunkUrl.StartsWith("https://") && Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute)) { goodentry = true; }
                 }
             }
             goodentry = false;
@@ -413,9 +414,9 @@ public class SipSplunk
         //loop indefinately a wait for pulse from other thread to query again
         while (true)
         {
+            splunkExceptions = false;
             using (Service service = new Service(new Uri(splunkUrl))) //"https://192.241.133.234:8089/"
             {
-                splunkExceptions = false;
                 try
                 {
                     SplunkReadDone = false;
@@ -423,17 +424,18 @@ public class SipSplunk
                     service.LogOnAsync(user, SecureStringToString(password)).Wait();
                     password.Clear();
                     TopLine("Getting results from query " + searchStrg, 0);
-                    SplunkQuery(service, searchStrg, earliest, latest).Wait();                    
-                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);                    
-                    SplunkReadDone = true;                    
+                    SplunkQuery(service, searchStrg, earliest, latest).Wait();
+                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
+                    SplunkReadDone = true;
                 }
                 catch (Exception ex)
                 {
+                    password.Clear();
                     //if the wrong splunk URL
                     if (ex.ToString().Contains("System.Net.Sockets.SocketException"))
                     {
                         TopLine(Regex.Match(ex.InnerException.ToString(), @"(?<=System.Net.Sockets.SocketException:).*").ToString(), 0);
-                    }
+                    }                
                     //if the wrong user or password
                     if (ex.ToString().Contains("Splunk.Client.AuthenticationFailureException"))
                     {
@@ -441,6 +443,8 @@ public class SipSplunk
                     }
                     splunkExceptions = true;
                     SplunkReadDone = true;
+                    Console.WriteLine(ex);
+                    Console.ReadKey(true);
                 }
                 finally
                 {
@@ -1171,7 +1175,7 @@ public class SipSplunk
                     Console.Write("Enter Splunk API URL [{0}]: ", splunkUrl);
                     string splunkUrlEntry = Console.ReadLine();
                     if (!string.IsNullOrEmpty(splunkUrlEntry)) { splunkUrl = splunkUrlEntry; }
-                    if (splunkUrl.StartsWith("https://")) { goodentry = true; }
+                    if (splunkUrl.StartsWith("https://") && Uri.IsWellFormedUriString(splunkUrl, UriKind.RelativeOrAbsolute)) { goodentry = true; }
                 }
                 goodentry = false;
                 while (!goodentry)
