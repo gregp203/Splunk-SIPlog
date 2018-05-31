@@ -409,11 +409,11 @@ public class SipSplunk
         {
             return true;
         };
-        currentSplunkLoadProg = 0;
-        using (Service service = new Service(new Uri(splunkUrl))) //"https://192.241.133.234:8089/"
+        currentSplunkLoadProg = 0;        
+        //loop indefinately a wait for pulse from other thread to query again
+        while (true)
         {
-            //loop indefinately a wait for pulse from other thread to query again
-            while (true)
+            using (Service service = new Service(new Uri(splunkUrl))) //"https://192.241.133.234:8089/"
             {
                 splunkExceptions = false;
                 try
