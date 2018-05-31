@@ -9,25 +9,14 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using System.Net;
 using Splunk.Client;
-using System.Net.Http;
+//using System.Net.Http;
 using System.Globalization;
 using System.Security;
 
 public class SipSplunk
 {
-    //tcpdump -i any -nn -A -tttt port 5060
-    /*
-    string GwAddrRgxStr = @"(?<=Sent:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2} Recv:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2}).*\[.*\].*\[.*\]\h(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"; //for AudioCodes 1st group is ip address
-    string farEndRgxStr = @"(?<= Outgoing SIP Message to | Incoming SIP Message from )\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"; //for AudioCodes
-    string directionRgxStr = @"(Outgoing|Incoming)(?= SIP Message (to|from))"; //for AudioCodes
-    string beginMsgRgxStr = @"\)\s*New SIPMessage created\s-"; //for AudioCodes
-    string dateRgxStr = @"(?<=Sent:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2} Recv:)\d{4}-\d{2}-\d{2}"; //for AudioCodes
-    string timeRgxStr = @"(?<=Sent:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2} Recv:\d{4}-\d{2}-\d{2}T)\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2}"; //for AudioCodes
-    string endMsgRgxStr = @"Sent:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2} Recv:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}-\d{2}:\d{2}"; // for AudioCodes
-    */
     string beginMsgRgxStr = @"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"; //regex to match the begining of the sip message (if it starts with a date and has time and two IP addresses)  for tcpdumpdump
     string dateRgxStr = @"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}(-|\+)\d{2}:\d{2})"; //for tcpdumpdump    
-    //string timeRgxStr = @"(\d{2}:\d{2}:\d{2}.\d{6})(-|\+)(\d{2}:\d{2})"; // group 1 is local time group 2 is + or - group 3 is TZ offset
     string srcIpPortRgxStr = @"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*(?= >)";
     string srcIpRgxStr = @"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?=(.|:)\d* >)";
     string dstIpPortRgxStr = @"(?<=> )(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*";
@@ -45,8 +34,7 @@ public class SipSplunk
     string occasRgxStr = @"(?<=Contact: ).*wlssuser";
     string cseqRgxStr = @"CSeq:\s?(\d{1,3})\s?(\w*)";
     Regex beginmsgRgx;
-    Regex dateRgx;
-    //Regex timeRgx;
+    Regex dateRgx;    
     Regex srcIpPortRgx;
     Regex srcIpRgx;
     Regex dstIpPortRgx;
@@ -91,8 +79,8 @@ public class SipSplunk
     //  useragent or server[16]
     //  CSeq [17]
     List<string[]> callLegs = new List<string[]>();
-    //  date [0]
-    //  time [1]
+    //  date and time stamp [0]
+    //  UTC [1]
     //  To: [2]
     //  From: [3]
     //  Call-ID [4]
@@ -167,7 +155,6 @@ public class SipSplunk
         Regex.CacheSize = 20;
         beginmsgRgx = new Regex(beginMsgRgxStr, RegexOptions.Compiled);
         dateRgx = new Regex(dateRgxStr, RegexOptions.Compiled);
-        //timeRgx = new Regex(timeRgxStr, RegexOptions.Compiled);
         srcIpPortRgx = new Regex(srcIpPortRgxStr, RegexOptions.Compiled);
         srcIpRgx = new Regex(srcIpRgxStr, RegexOptions.Compiled);
         dstIpPortRgx = new Regex(dstIpPortRgxStr, RegexOptions.Compiled);
@@ -313,29 +300,32 @@ public class SipSplunk
                     SipSplunkObj.user = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.user)) { goodentry = true; }
                 }
-            }            
-            Console.Write("Enter Splunk user " + SipSplunkObj.user + " password : ");
-            ConsoleKeyInfo key;            
-            do
+            }
+            goodentry = false;
+            while (!goodentry)
             {
-                key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.Backspace)
+                Console.Write("Enter Splunk user " + SipSplunkObj.user + " password : ");
+                ConsoleKeyInfo key;            
+                do
                 {
-                    if (SipSplunkObj.password.Length > 0)
+                    key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Backspace)
                     {
-                        //SipSplunkObj.password = SipSplunkObj.password.Substring(0, (SipSplunkObj.password.Length - 1));
-                        SipSplunkObj.password.RemoveAt(SipSplunkObj.password.Length - 1);
-                        Console.Write("\b \b");
+                        if (SipSplunkObj.password.Length > 0)
+                        {
+                            SipSplunkObj.password.RemoveAt(SipSplunkObj.password.Length - 1);
+                            Console.Write("\b \b");
+                        }
                     }
-                }
-                if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
-                {
-                    //SipSplunkObj.password += key.KeyChar;
-                    SipSplunkObj.password.AppendChar(key.KeyChar);
-                    Console.Write("*");
-                }                
-            } while (key.Key != ConsoleKey.Enter);
-            Console.WriteLine();            
+                    if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
+                    {
+                        SipSplunkObj.password.AppendChar(key.KeyChar);
+                        Console.Write("*");
+                    }                
+                } while (key.Key != ConsoleKey.Enter);
+                Console.WriteLine();
+                if (SipSplunkObj.password.Length > 0) goodentry = true;
+            }
             goodentry = false;
             if (String.IsNullOrEmpty(SipSplunkObj.searchStrg) || !SipSplunkObj.searchStrg.Contains("index="))
             {
@@ -388,8 +378,7 @@ public class SipSplunk
                 {
                     goodTimeEntry = true;
                 }
-            }
-            
+            }            
             Thread SplunkReadThread = new Thread(() => { SipSplunkObj.SplunkReader(); });
             SplunkReadThread.Name = "Splunk Query/Reader Thread";
             SplunkReadThread.Start();
@@ -432,13 +421,10 @@ public class SipSplunk
                     SplunkReadDone = false;
                     TopLine("Connecting to splunk", 0);
                     service.LogOnAsync(user, SecureStringToString(password)).Wait();
+                    password.Clear();
                     TopLine("Getting results from query " + searchStrg, 0);
                     SplunkQuery(service, searchStrg, earliest, latest).Wait();                    
-                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
-                    /*lock (_DataLocker) SortCalls();
-                    if (displayMode == "calls") CallDisplay(true);
-                    Console.SetWindowPosition(0, 0);
-                    Console.SetCursorPosition(0, 4);*/
+                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);                    
                     SplunkReadDone = true;                    
                 }
                 catch (Exception ex)
@@ -453,7 +439,6 @@ public class SipSplunk
                     {
                         TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.AuthenticationFailureException).*").ToString(), 0);
                     }
-                    //Console.WriteLine(ex.ToString());
                     splunkExceptions = true;
                     SplunkReadDone = true;
                 }
@@ -491,7 +476,6 @@ public class SipSplunk
                 {
                     TopLine("Search took too long and timed out", 0);
                 }
-                // Consider increasing the delay on each iteration                
             }
             using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
             {
@@ -713,7 +697,6 @@ public class SipSplunk
                     case TZmode.local:
                         {
                             timeString = "Local Time";
-                            
                             break;
                         }
                     case TZmode.utc:
@@ -1198,27 +1181,31 @@ public class SipSplunk
                     if (!string.IsNullOrEmpty(userEntry)) { user = userEntry; }
                     if (user != null) { goodentry = true; }
                 }
-                ConsoleKeyInfo key;
-                do
+                goodentry = false;
+                while (!goodentry)
                 {
-                    key = Console.ReadKey(true);
-                    if (key.Key == ConsoleKey.Backspace)
+                    Console.Write("Enter Splunk user " + user + " password : ");
+                    ConsoleKeyInfo key;
+                    do
                     {
-                        if (password.Length > 0)
+                        key = Console.ReadKey(true);
+                        if (key.Key == ConsoleKey.Backspace)
                         {
-                            //SipSplunkObj.password = SipSplunkObj.password.Substring(0, (SipSplunkObj.password.Length - 1));
-                            password.RemoveAt(password.Length - 1);
-                            Console.Write("\b \b");
+                            if (password.Length > 0)
+                            {
+                                password.RemoveAt(password.Length - 1);
+                                Console.Write("\b \b");
+                            }
                         }
-                    }
-                    if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
-                    {
-                        //SipSplunkObj.password += key.KeyChar;
-                        password.AppendChar(key.KeyChar);
-                        Console.Write("*");
-                    }
-                } while (key.Key != ConsoleKey.Enter);
-                Console.WriteLine();
+                        if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
+                        {
+                            password.AppendChar(key.KeyChar);
+                            Console.Write("*");
+                        }
+                    } while (key.Key != ConsoleKey.Enter);
+                    Console.WriteLine();
+                    if (password.Length>0) goodentry = true;
+                }
                 goodentry = false;
                 while (!goodentry)
                 {
@@ -1325,7 +1312,6 @@ public class SipSplunk
                         writeFileName = writeFileName + ".sls";
                         try
                         {
-                            // Attempt to open output file.
                             StreamWriter flowConfigFileWriter = new StreamWriter(writeFileName);
                             flowConfigFileWriter.WriteLine(splunkUrl);
                             flowConfigFileWriter.WriteLine(searchStrg);
@@ -1743,8 +1729,7 @@ public class SipSplunk
             }
             else
             {
-                string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));
-                //string spaceRight = new String(' ', 27 - (int)(Math.Floor((decimal)(displayedline.Length / 2)))) + "|";
+                string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));                
                 string spaceRight = new String(' ', 53 - spaceLeft.Length- displayedline.Length) + "|";
                 if (invert)
                 {
@@ -1918,8 +1903,7 @@ public class SipSplunk
             }
             else
             {
-                string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));
-                //string spaceRight = new String(' ', 27 - (int)(Math.Ceiling((decimal)(displayedline.Length / 2)))) + "|";
+                string spaceLeft = new String(' ', 26 - (int)(Math.Floor((decimal)(displayedline.Length / 2))));                
                 string spaceRight = new String(' ', 53 - spaceLeft.Length- displayedline.Length) + "|";
                 if (invert)
                 {
@@ -2154,7 +2138,6 @@ public class SipSplunk
                     if (Regex.IsMatch(writeFileName, @"^.*\.html$")) { htmlFlowToFile = true; }
                     try
                     {
-                        // Attempt to open output file.
                         flowFileWriter = new StreamWriter(writeFileName);
                     }
                     catch (IOException e)
@@ -2179,7 +2162,6 @@ public class SipSplunk
                     flowFileWriter.WriteLine(" ");
                     Console.SetCursorPosition(0, 1);
                     Console.SetWindowPosition(0, 0);
-
                     //cycle through all the seleted msg 
                     for (int i = 0; i < selectedmessages.Count; i++)
                     {
@@ -2725,6 +2707,5 @@ public class ConsoleBuffer
         public short Right;
         public short Bottom;
     }
-
 }
 
