@@ -221,7 +221,7 @@ public class SipSplunk
     {
         try
         {
-            float version = 1.0f;
+            float version = 1.1f;
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
@@ -272,7 +272,6 @@ public class SipSplunk
             /*
             SipSplunkObj.splunkUrl = "https://10.204.140.100:8089/";
             SipSplunkObj.user = "admin";
-            
             SipSplunkObj.searchStrg = "index=siplog";
             //SipSplunkObj.earliest = "2018-01-19T00:00:00.000-05:00";
             //SipSplunkObj.latest = "2018-01-20T00:00:00.000-05:00";
@@ -287,7 +286,7 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk API URL ex. https://127.0.0.1:8089/ : ");
+                    Console.Write("Enter Splunk API URL ex. https://10.0.0.1:8089/ : ");
                     SipSplunkObj.splunkUrl = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.splunkUrl) && SipSplunkObj.splunkUrl.StartsWith("https://") && Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute)) { goodentry = true; }
                 }
@@ -443,8 +442,6 @@ public class SipSplunk
                     }
                     splunkExceptions = true;
                     SplunkReadDone = true;
-                    Console.WriteLine(ex);
-                    Console.ReadKey(true);
                 }
                 finally
                 {
@@ -1603,6 +1600,11 @@ public class SipSplunk
             flowWidth = 24;
             if (writeFlowToFile)
             {
+                if (htmlFlowToFile)
+                {
+                    flowFileWriter.Write("<div class=\"hosts\">");
+                    flowFileWriter.Write("<br>");
+                }
                 WriteConsole(new String(' ', 17), fieldAttrTxtClr, fieldAttrBkgrdClr);
             }
             else
@@ -1655,6 +1657,14 @@ public class SipSplunk
             }
             WriteLineConsole("", fieldAttrTxtClr, fieldAttrBkgrdClr);
             WriteLineConsole(new String('-', flowWidth - 1), fieldAttrTxtClr, fieldAttrBkgrdClr);
+            if (htmlFlowToFile)
+            {
+                flowFileWriter.Write("</div>");
+            }
+            if (htmlFlowToFile)
+            {
+                flowFileWriter.Write("<div class=\"main\">");
+            }
             foreach (string[] msg in selectedmessages)
             {
                 WriteMessageLine(msg, false);
@@ -2155,7 +2165,16 @@ public class SipSplunk
                         flowFileWriter.WriteLine("<!DOCTYPE html>");
                         flowFileWriter.WriteLine("<html>");
                         flowFileWriter.WriteLine("<head>");
-                        flowFileWriter.WriteLine("<style> a:link {text-decoration: none} </style>");
+                        flowFileWriter.WriteLine("<style> a:link {text-decoration: none} ");
+                        flowFileWriter.WriteLine(".hosts {");
+                        flowFileWriter.WriteLine("  position: fixed;");
+                        flowFileWriter.WriteLine("  background-color: white;");
+                        flowFileWriter.WriteLine("  top: 0;");
+                        flowFileWriter.WriteLine("}");
+                        flowFileWriter.WriteLine(".main {");
+                        flowFileWriter.WriteLine("  margin-top: 4.5em;");
+                        flowFileWriter.WriteLine("}");
+                        flowFileWriter.WriteLine("</style>");
                         flowFileWriter.WriteLine("<font face=\"Courier\" >");
                         flowFileWriter.WriteLine("</head>");
                         flowFileWriter.WriteLine("<body>");
@@ -2204,6 +2223,7 @@ public class SipSplunk
                     }
                     if (htmlFlowToFile)
                     {
+                        flowFileWriter.Write("</div>");
                         flowFileWriter.WriteLine("</pre>");
                         flowFileWriter.WriteLine("</body>");
                         flowFileWriter.WriteLine("</html>");
