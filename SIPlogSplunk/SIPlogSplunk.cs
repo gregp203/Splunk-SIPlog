@@ -220,7 +220,7 @@ public class SipSplunk
     {
         try
         {
-            float version = 1.1f;
+            float version = 1.2f;
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
