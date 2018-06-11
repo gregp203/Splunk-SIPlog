@@ -9,7 +9,6 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using System.Net;
 using Splunk.Client;
-//using System.Net.Http;
 using System.Globalization;
 using System.Security;
 
@@ -331,7 +330,8 @@ public class SipSplunk
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter Splunk search string. Must contain \"index=\" : ");
+                    Console.WriteLine("Enter Splunk application and search string. Must contain \"index=\"");
+                    Console.Write("example: search index=siplogs 2035551212 : ");
                     SipSplunkObj.searchStrg = Console.ReadLine();
                     if (SipSplunkObj.searchStrg.Contains("index=")) { goodentry = true; }
                 }
@@ -382,7 +382,7 @@ public class SipSplunk
             Thread SplunkReadThread = new Thread(() => { SipSplunkObj.SplunkReader(); });
             SplunkReadThread.Name = "Splunk Query/Reader Thread";
             SplunkReadThread.Start();
-            SipSplunkObj.CallSelect();
+            SipSplunkObj.CallSelect(); //GUI thread
         }
         catch (Exception ex)
         {
@@ -402,13 +402,13 @@ public class SipSplunk
     }
 
     void SplunkReader()
-    {
-        //splunk query
+    { 
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         ServicePointManager.ServerCertificateValidationCallback += (sender, certificate, chain, sslPolicyErrors) =>
         {
             return true;
         };
+        
         currentSplunkLoadProg = 0;        
         //loop indefinately a wait for pulse from other thread to query again
         while (true)
@@ -427,7 +427,7 @@ public class SipSplunk
                     if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
                     SplunkReadDone = true;
                 }
-                catch (Exception ex)
+                catch (AggregateException ex)
                 {
                     password.Clear();
                     //if the wrong splunk URL
@@ -436,16 +436,37 @@ public class SipSplunk
                         TopLine(Regex.Match(ex.InnerException.ToString(), @"(?<=System.Net.Sockets.SocketException:).*").ToString(), 0);
                     }                
                     //if the wrong user or password
-                    if (ex.ToString().Contains("Splunk.Client.AuthenticationFailureException"))
+                    else if (ex.ToString().Contains("Splunk.Client.AuthenticationFailureException"))
                     {
                         TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.AuthenticationFailureException).*").ToString(), 0);
+                    }
+                    else
+                    {
+                        
+                        Console.WriteLine("\nMessage ---\n{0}", ex.InnerException.Message);
+                        Console.WriteLine(
+                            "\nHelpLink ---\n{0}", ex.HelpLink);
+                        Console.WriteLine("\nSource ---\n{0}", ex.InnerException.Source);
+                        Console.WriteLine(
+                            "\nStackTrace ---\n{0}", ex.InnerException.StackTrace);
+                        Console.WriteLine(
+                            "\nTargetSite ---\n{0}", ex.InnerException.TargetSite);
+                        Console.ReadKey(true);
                     }
                     splunkExceptions = true;
                     SplunkReadDone = true;
                 }
                 finally
                 {
-                    if (!splunkExceptions) service.LogOffAsync().Wait();
+                    try
+                    {
+                        if (!splunkExceptions) service.LogOffAsync().Wait();
+                    }
+                    catch (Exception)
+                    {
+
+                        
+                    }
                 }
                 lock (_QueryAgainlocker)
                 {
@@ -457,17 +478,24 @@ public class SipSplunk
 
     async Task SplunkQuery(Service service, string searchStrg, string earliest, string latest)
     {
-        int delay = 30000;
         try
         {
-            var job = await service.Jobs.CreateAsync("search " + searchStrg + " | reverse", 10000, ExecutionMode.Normal,
+            var job = await service.Jobs.CreateAsync(searchStrg + " | reverse", 0, ExecutionMode.Normal,
             new JobArgs()
             {
                 EarliestTime = earliest, //"2018-02-06T13:25:23.624-05:00"
                 LatestTime = latest, //"2018-02-06T13:25:23.642-05:00"
+                MaxCount = 20000
             });
+            int delay = 10000;
+            int MaxTime = 6;
             for (int count = 1; ; ++count)
             {
+                if (count >= MaxTime)
+                {
+                    await job.FinalizeAsync();
+                    break;
+                }
                 try
                 {
                     await job.TransitionAsync(DispatchState.Done, delay);
@@ -475,13 +503,16 @@ public class SipSplunk
                 }
                 catch (TaskCanceledException)
                 {
-                    TopLine("Search took too long and timed out", 0);
+                    TopLine("Waiting on job " + count * 10 + " seconds", 0);
                 }
+
             }
-            using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
+            if (job.DispatchState != DispatchState.Failed)
             {
-                using (Stream splunkStream = await message.Content.ReadAsStreamAsync())
+                using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
                 {
+                    Stream splunkStream = await message.Content.ReadAsStreamAsync();
+                    //splunkStream.ReadTimeout = 900000;
                     splunkSR = new StreamReader(splunkStream);
                     while (!splunkSR.EndOfStream)
                     {
@@ -490,13 +521,31 @@ public class SipSplunk
                     splunkSR.Close();
                 }
             }
+            else
+            {
+                TopLine("Splunk job failed", 0);
+            }
+            
         }
-        catch (Exception ex)
+        catch (TaskCanceledException ex)
         {
-            TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.).*").ToString(), 0);
+            //TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.).*").ToString(), 0);
+
+            Console.WriteLine("query exception");
+            Console.WriteLine(ex.ToString());
+            Console.WriteLine("\nMessage ---\n{0}", ex.Message);
+            Console.WriteLine(
+                "\nHelpLink ---\n{0}", ex.HelpLink);
+            Console.WriteLine("\nSource ---\n{0}", ex.Source);
+            Console.WriteLine(
+                "\nStackTrace ---\n{0}", ex.StackTrace);
+            Console.WriteLine(
+                "\nTargetSite ---\n{0}", ex.TargetSite);
+            Console.ReadKey(true);
             splunkExceptions = true;
         }
     }
+
 
     void ReadData()
     {
@@ -2731,5 +2780,17 @@ public class ConsoleBuffer
         public short Right;
         public short Bottom;
     }
+}
+
+
+[Serializable]
+public class MyException : Exception
+{
+    public MyException() { }
+    public MyException(string message) : base(message) { }
+    public MyException(string message, Exception inner) : base(message, inner) { }
+    protected MyException(
+      System.Runtime.Serialization.SerializationInfo info,
+      System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
 }
 
