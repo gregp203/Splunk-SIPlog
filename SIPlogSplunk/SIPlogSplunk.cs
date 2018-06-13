@@ -147,7 +147,12 @@ public class SipSplunk
     string earliest;
     string latest;
     bool splunkExceptions;
-    
+    bool CancelSplunkJob;
+    int splunkMaxEvents;
+    int splunkMaxTime;
+    int splunkDelayInterval;
+    long splunkResultCount;
+    long splunkEventCount;
 
 
     public SipSplunk()
@@ -214,13 +219,17 @@ public class SipSplunk
         splunkExceptions = false;
         timeMode = TZmode.local;
         password = new SecureString();
+        CancelSplunkJob = false;
+        splunkMaxEvents = 0;
+        splunkMaxTime = 0;
+        splunkDelayInterval = 0;
     }
 
     static void Main(String[] arg)
     {
         try
         {
-            float version = 1.2f;
+            float version = 1.3f;
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
@@ -245,11 +254,42 @@ public class SipSplunk
                 Console.ForegroundColor = ConsoleColor.Gray;
                 Environment.Exit(1);
             }
-            SipSplunk SipSplunkObj = new SipSplunk();
+            
+            SipSplunk SipSplunkObj = new SipSplunk();            
+            if (File.Exists("siplogsplunk.settings"))
+            {
+                string[] settingsFile = File.ReadAllLines("siplogsplunk.settings");
+                foreach (string line in settingsFile)
+                {
+                    if (Regex.IsMatch(line, @"splunkMaxEvents\s*=\s*\d*"))
+                    {
+                        Console.WriteLine(line);
+                        SipSplunkObj.splunkMaxEvents = int.Parse(Regex.Match(line, @"(splunkMaxEvents)(\s*=\s*)(\d*)").Groups[3].ToString());                                               
+                    }
+                    if (Regex.IsMatch(line, @"splunkMaxTime\s*=\s*\d*"))
+                    {
+                        Console.WriteLine(line);
+                        SipSplunkObj.splunkMaxTime = int.Parse(Regex.Match(line, @"(splunkMaxTime)(\s*=\s*)(\d*)").Groups[3].ToString());
+                    }
+                    if (Regex.IsMatch(line, @"splunkDelayInterval\s*=\s*\d*"))
+                    {
+                        Console.WriteLine(line);
+                        SipSplunkObj.splunkDelayInterval = int.Parse(Regex.Match(line, @"(splunkDelayInterval)(\s*=\s*)(\d*)").Groups[3].ToString());
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine("siplogsplunk.settings is missing");
+                Environment.Exit(1);
+            }
+            if (SipSplunkObj.splunkMaxEvents == 0 || SipSplunkObj.splunkMaxTime == 0 || SipSplunkObj.splunkDelayInterval == 0)
+            {
+                Console.WriteLine("a setting from siplogsplunk.settings is missing");
+                Environment.Exit(1);
+            }
+            Console.WriteLine();
             SipSplunkObj.displayMode = "calls";
-
-            //handle args                        
-
             if (arg.Length > 0)
             {
                 try
@@ -423,9 +463,9 @@ public class SipSplunk
                     service.LogOnAsync(user, SecureStringToString(password)).Wait();
                     password.Clear();
                     TopLine("Getting results from query " + searchStrg, 0);
-                    SplunkQuery(service, searchStrg, earliest, latest).Wait();
-                    if (!splunkExceptions) TopLine("Completed Splunk Query with " + streamData.Count() + " lines of data", 0);
-                    SplunkReadDone = true;
+                    SplunkQuery(service, searchStrg, earliest, latest).Wait();                    
+                    if (!splunkExceptions) TopLine("Completed splunk query with " + streamData.Count() + " lines of data", 0);
+                    SplunkReadDone = true;                    
                 }
                 catch (AggregateException ex)
                 {
@@ -440,9 +480,12 @@ public class SipSplunk
                     {
                         TopLine(Regex.Match(ex.ToString(), @"(?<=Splunk.Client.AuthenticationFailureException).*").ToString(), 0);
                     }
-                    else
+                    else if(ex.InnerException.Message.Contains("Unknown search command"))
                     {
-                        
+                        TopLine(Regex.Match(ex.InnerException.Message, @"(?<=Search Factory: ).*\s*").ToString(),0);
+                    }
+                    else 
+                    {
                         Console.WriteLine("\nMessage ---\n{0}", ex.InnerException.Message);
                         Console.WriteLine(
                             "\nHelpLink ---\n{0}", ex.HelpLink);
@@ -464,7 +507,6 @@ public class SipSplunk
                     }
                     catch (Exception)
                     {
-
                         
                     }
                 }
@@ -472,6 +514,7 @@ public class SipSplunk
                 {
                     Monitor.Wait(_QueryAgainlocker);
                 }
+                CancelSplunkJob = false;
             }
         }
     }
@@ -480,36 +523,51 @@ public class SipSplunk
     {
         try
         {
-            var job = await service.Jobs.CreateAsync(searchStrg + " | reverse", 0, ExecutionMode.Normal,
+            var splunkJob = await service.Jobs.CreateAsync(searchStrg + " | dedup _raw | reverse", 0, ExecutionMode.Normal,
             new JobArgs()
             {
                 EarliestTime = earliest, //"2018-02-06T13:25:23.624-05:00"
                 LatestTime = latest, //"2018-02-06T13:25:23.642-05:00"
-                MaxCount = 20000
+                MaxCount = splunkMaxEvents
             });
-            int delay = 10000;
-            int MaxTime = 6;
+            //int iniDelayInterval = 5000;
+            //int iniMaxTime = 30000;
             for (int count = 1; ; ++count)
             {
-                if (count >= MaxTime)
+                if(CancelSplunkJob)
                 {
-                    await job.FinalizeAsync();
+                    await splunkJob.CancelAsync();
+                    TopLine("Splunk query is canceled.", 0);
+                    break;
+                }
+                if (count >= splunkMaxTime / splunkDelayInterval)
+                {
+                    await splunkJob.FinalizeAsync();
+                    TopLine("Exceeded maximum wait time of "+ splunkMaxTime / 1000 +" seconds. Finalizing...", 0);
+                    break;
+                }
+                if (splunkJob.IsFinalized)
+                {
+                    TopLine("Splunk query is finalized", 0);
                     break;
                 }
                 try
                 {
-                    await job.TransitionAsync(DispatchState.Done, delay);
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkDelayInterval);
                     break;
                 }
                 catch (TaskCanceledException)
                 {
-                    TopLine("Waiting on job " + count * 10 + " seconds", 0);
+                    TopLine("Waiting on splunk query results " + count * 5 + " seconds", 0);
                 }
-
             }
-            if (job.DispatchState != DispatchState.Failed)
+            if (splunkJob.IsFinalized|| splunkJob.IsDone)
             {
-                using (var message = await job.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
+                TopLine(splunkJob.ResultCount +" results out of "+ splunkJob.EventCount + " Events found", 0);
+                splunkResultCount = splunkJob.ResultCount;
+                splunkEventCount = splunkJob.EventCount;
+
+                using (var message = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
                 {
                     Stream splunkStream = await message.Content.ReadAsStreamAsync();
                     //splunkStream.ReadTimeout = 900000;
@@ -523,9 +581,9 @@ public class SipSplunk
             }
             else
             {
-                TopLine("Splunk job failed", 0);
+                TopLine("Splunk query failed", 0);
             }
-            
+             
         }
         catch (TaskCanceledException ex)
         {
@@ -786,9 +844,11 @@ public class SipSplunk
             string footerOne = "Number of SIP messages found : " + messages.Count.ToString();
             string footerTwo = "Number of SIP transactions found : " + callLegs.Count.ToString();
             string footerThree = CallInvites.ToString() + " SIP INVITEs found | " + notifications.ToString() + " SIP NOTIFYs found | " + registrations.ToString() + " SIP REGISTERs found | " + subscriptions.ToString() + " SIP SUBSCRIBEs found";
+            string footerFour = splunkResultCount + " results out of "+ splunkEventCount + " events found";
             WriteScreen(footerOne + new String(' ', Console.BufferWidth - footerOne.Length), 0, (short)(callLegsDisplayed.Count + 4), footerTxtClr, footerBkgrdClr);
             WriteScreen(footerTwo + new String(' ', Console.BufferWidth - footerTwo.Length), 0, (short)(callLegsDisplayed.Count + 5), footerTxtClr, footerBkgrdClr);
             WriteScreen(footerThree + new String(' ', Console.BufferWidth - footerThree.Length), 0, (short)(callLegsDisplayed.Count + 6), footerTxtClr, footerBkgrdClr);
+            WriteScreen(footerFour + new String(' ', Console.BufferWidth - footerFour.Length), 0, (short)(callLegsDisplayed.Count + 7), footerTxtClr, footerBkgrdClr);
             if (callLegsDisplayed.Count > 0)
             {
                 Console.SetCursorPosition(0, CallListPosition + 4);
@@ -1205,8 +1265,9 @@ public class SipSplunk
                     displayMode = "calls";
                 }
             }
-            if (SplunkReadDone && keypressed.Key == ConsoleKey.Q)
+            if (keypressed.Key == ConsoleKey.Q)
             {
+                CancelSplunkJob = true;
                 displayMode = "splunkqueryentry";
                 ClearConsoleNoTop();
                 Console.BackgroundColor = fieldConsoleBkgrdClr;  //change the colors of the current postion to normal
@@ -2793,4 +2854,24 @@ public class MyException : Exception
       System.Runtime.Serialization.SerializationInfo info,
       System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
 }
-
+/*
+index=siplog | 
+rex field=_raw "(?<SIP_SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|.)\d*(?= >))"|
+rex field=_raw "(?<SIP_DstIP>(?<=> )\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|.)\d*)"|
+rex field=_raw "(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))"|
+rex field=_raw "(?<SIP_CallId>(?<!-.{8})(?<=Call-ID:).*)"|
+rex field=_raw "(?<=To:) *(\x22.+\x22)? *<?(sip:)(?<SIP_To>[^@>]+)"|
+rex field=_raw "(?<=From:) *(\x22.+\x22)? *<?(sip:)(?<SIP_From>[^@>]+)"|
+rex field=_raw "(?<SIP_UA>(?<=User-Agent:).*)"|
+rex field=_raw "(?<SIP_Server>(?<=Server:).*)"|
+rex field=_raw "(?<SIP_SDPport>(?<=m=audio )\d*)"|
+rex field=_raw "(?<SIP_SDPcodec>(?<=RTP\/AVP )\d*)"|
+rex field=_raw "(?<SIP_SDPiP>(?<=c=IN IP4 )(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}))"|
+rex field=_raw "(?<SIP_SDPmAudio>m=audio \d* RTP\/AVP \d*)"|
+rex field=_raw "(?<SIP_occas>(?<=Contact: ).*wlssuser)"|
+rex field=_raw "(?<SIP_CSeq>CSeq:\s?(\d{1,3})\s?(\w*))"| 
+eval timeForamted=strftime(_time, "%+")|
+search SIP_Req = *INVITE*|
+stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_SrcIP) as Source_IP, first(SIP_DstIP) as Destination_IP, first(timeForamted) as DateTime by SIP_CallId| 
+table DateTime,From,To,Source_IP,Destination_IP
+*/
