@@ -11,17 +11,20 @@ using Splunk.Client;
 using System.Globalization;
 using System.Security;
 using System.Net;
+using System.Diagnostics;
 
 public class SipSplunk
 {
     string beginMsgRgxStr = @"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}.*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"; //regex to match the begining of the sip message (if it starts with a date and has time and two IP addresses)  for tcpdumpdump
-    string dateRgxStr = @"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6}(-|\+)\d{2}:\d{2})"; //for tcpdumpdump    
-    string srcIpPortRgxStr = @"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*(?= >)";
-    string srcIpRgxStr = @"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?=(.|:)\d* >)";
-    string dstIpPortRgxStr = @"(?<=> )(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(:|.)\d*";
+    string acBeginMsgRgxStr = @".srcip=(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*dstip=(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*Sent:(?<timedate>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}.\d{2}:\d{2}).*(?<req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))";
+    string acSyslogBeginMsgRgxStr = @".srcip=(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*dstip=(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*\d{2}:\d{2}:\d{2}.(?<ms>\d{3}).*(?<req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))";
+    string acSyslogTimeRgxStr = @"\[Time:(?<day>\d{2})-(?<month>\d{2})@(?<time>\d{2}:\d{2}:\d{2})\]";
+    string dateRgxStr = @"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{6})"; //for tcpdumpdump 
+    string srcIpRgxStr = @"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?=(.|:)\d* >)";    
     string dstIpRgxStr = @"(?<=> )(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})";
     string requestRgxStr = @"ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*)";
-    string callidRgxStr = @"(?<!-.{8})(?<=Call-ID:).*";//do not match if -Call-ID instead of Call-ID
+    //string callidRgxStr = @"(?<!-.{8})(?<=Call-ID:)\S*";//do not match if -Call-ID instead of Call-ID
+    string callidRgxStr = @"(?<!-.{8})(?<=Call-ID:)\s* (\S*)";
     string toRgxStr = @"(?<=To:) *(\x22.+\x22)? *<?(sip:)([^@>]+)";
     string fromRgxStr = @"(?<=From:) *(\x22.+\x22)? *<?(sip:)([^@>]+)";
     string uaRgxStr = @"(?<=User-Agent:).*";
@@ -33,10 +36,11 @@ public class SipSplunk
     string occasRgxStr = @"(?<=Contact: ).*wlssuser";
     string cseqRgxStr = @"CSeq:\s?(\d{1,3})\s?(\w*)";
     Regex beginmsgRgx;
-    Regex dateRgx;    
-    Regex srcIpPortRgx;
-    Regex srcIpRgx;
-    Regex dstIpPortRgx;
+    Regex acBeginMsgRgx;
+    Regex acSyslogBeginMsgRgx;
+    Regex acSyslogTimeRgx;
+    Regex dateRgx;
+    Regex srcIpRgx;   
     Regex dstIpRgx;
     Regex requestRgx;
     Regex callidRgx;
@@ -53,10 +57,10 @@ public class SipSplunk
     static readonly object _DataLocker = new object();
     static readonly object _QueryAgainlocker = new object();
     static readonly object _DisplayLocker = new object();
-        enum CallLegColors { Green, Cyan, Red, Magenta, Yellow, DarkGreen, DarkCyan, DarkRed, DarkMagenta };
+    static readonly object _LogLocker = new object();
+    enum CallLegColors { Green, Cyan, Red, Magenta, Yellow, DarkGreen, DarkCyan, DarkRed, DarkMagenta };
     enum AttrColor : short { Black, DarkBlue, DarkGreen, DarkCyan, DarkRed, DarkMagenta, Darkyellow, Gray, DarkGray, Blue, Green, Cyan, Red, Magenta, Yellow, White, }
-    String[,] sortFields;
-    bool IncludePorts;
+    String[,] sortFields;   
     List<string> streamData = new List<string>();
     List<string[]> messages = new List<string[]>();
     //  index start of msg[0] 
@@ -86,7 +90,7 @@ public class SipSplunk
     //  selected [5]
     //  src ip [6]
     //  dst ip [7]
-    //  filtered [8]
+    //  end time [8]
     //  method(invite,notify,registraion,supscription) [9]
     String[] filter;
     List<string[]> callLegsDisplayed = new List<string[]>(); // filtered call legs where [8] == filtered 
@@ -150,19 +154,22 @@ public class SipSplunk
     bool CancelSplunkJob;
     int splunkMaxEvents;
     int splunkMaxTime;
-    int splunkDelayInterval;
+    int splunkStatusInterval;
     bool okToQuerySIPmsg;
-
-
+    StreamWriter logFileSW;
+    string logMode;
+    DateTime SelectedCallsEarliestTime;
+    DateTime SelectedCallsLatestTime;
 
     public SipSplunk()
     {
-        Regex.CacheSize = 20;
+        Regex.CacheSize = 19;
         beginmsgRgx = new Regex(beginMsgRgxStr, RegexOptions.Compiled);
-        dateRgx = new Regex(dateRgxStr, RegexOptions.Compiled);
-        srcIpPortRgx = new Regex(srcIpPortRgxStr, RegexOptions.Compiled);
-        srcIpRgx = new Regex(srcIpRgxStr, RegexOptions.Compiled);
-        dstIpPortRgx = new Regex(dstIpPortRgxStr, RegexOptions.Compiled);
+        acBeginMsgRgx = new Regex(acBeginMsgRgxStr, RegexOptions.Compiled);
+        acSyslogBeginMsgRgx = new Regex(acSyslogBeginMsgRgxStr, RegexOptions.Compiled);
+        acSyslogTimeRgx = new Regex(acSyslogTimeRgxStr, RegexOptions.Compiled);
+        dateRgx = new Regex(dateRgxStr, RegexOptions.Compiled);        
+        srcIpRgx = new Regex(srcIpRgxStr, RegexOptions.Compiled);        
         dstIpRgx = new Regex(dstIpRgxStr, RegexOptions.Compiled);
         requestRgx = new Regex(requestRgxStr, RegexOptions.Compiled);
         callidRgx = new Regex(callidRgxStr, RegexOptions.Compiled);
@@ -197,8 +204,7 @@ public class SipSplunk
         sortTxtdClr = AttrColor.DarkBlue;
         sortBkgrdClr = AttrColor.Green;
         fakeCursor[0] = 0;
-        fakeCursor[1] = 0;
-        IncludePorts = false;
+        fakeCursor[1] = 0;        
         showNotify = false;
         methodDisplayed = "INVITE";
         dupIP = false;
@@ -222,14 +228,16 @@ public class SipSplunk
         CancelSplunkJob = false;
         splunkMaxEvents = 0;
         splunkMaxTime = 0;
-        splunkDelayInterval = 0;
+        splunkStatusInterval = 5000;
+        logFileSW = File.AppendText("log.txt");
+        logMode = "";
     }
 
     static void Main(String[] arg)
     {
         try
         {
-            float version = 1.4f;
+            float version = 1.5f;
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
@@ -268,9 +276,9 @@ public class SipSplunk
                         Console.WriteLine(line);
                         SipSplunkObj.splunkMaxTime = int.Parse(Regex.Match(line, @"(splunkMaxTime)(\s*=\s*)(\d*)").Groups[3].ToString());
                     }
-                    if (Regex.IsMatch(line, @"splunkDelayInterval\s*=\s*\d*")){
+                    if (Regex.IsMatch(line, @"splunkStatusInterval\s*=\s*\d*")){
                         Console.WriteLine(line);
-                        SipSplunkObj.splunkDelayInterval = int.Parse(Regex.Match(line, @"(splunkDelayInterval)(\s*=\s*)(\d*)").Groups[3].ToString());
+                        SipSplunkObj.splunkStatusInterval = int.Parse(Regex.Match(line, @"(splunkStatusInterval)(\s*=\s*)(\d*)").Groups[3].ToString());
                     }
                 }
             }
@@ -278,7 +286,7 @@ public class SipSplunk
                 Console.WriteLine("siplogsplunk.settings is missing");
                 Environment.Exit(1);
             }
-            if (SipSplunkObj.splunkMaxEvents == 0 || SipSplunkObj.splunkMaxTime == 0 || SipSplunkObj.splunkDelayInterval == 0){
+            if (SipSplunkObj.splunkMaxEvents == 0 || SipSplunkObj.splunkMaxTime == 0 || SipSplunkObj.splunkStatusInterval == 0){
                 Console.WriteLine("a setting from siplogsplunk.settings is missing");
                 Environment.Exit(1);
             }
@@ -288,10 +296,11 @@ public class SipSplunk
             if (arg.Length > 0){
                 try{
                     string[] configFileLines = File.ReadAllLines(arg[0]);
-                    SipSplunkObj.splunkUrl = configFileLines[0];
-                    SipSplunkObj.searchStrg = configFileLines[1];
-                    SipSplunkObj.earliest = configFileLines[2];
-                    SipSplunkObj.latest = configFileLines[3];
+                    SipSplunkObj.splunkUrl = configFileLines[0].Trim();
+                    SipSplunkObj.searchStrg = configFileLines[1].Trim();
+                    SipSplunkObj.earliest = configFileLines[2].Trim();
+                    SipSplunkObj.latest = configFileLines[3].Trim();
+                    SipSplunkObj.logMode = configFileLines[4].Trim();
                 }
                 catch (Exception ex){
                     Console.WriteLine(ex.ToString().Substring(0, ex.ToString().IndexOf(Environment.NewLine)));
@@ -311,8 +320,8 @@ public class SipSplunk
             */
             
             //test if the loaded info is correct and if not or is missing prompt for it
-            Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)",RegexOptions.IgnoreCase);
-            Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now",RegexOptions.IgnoreCase);
+            Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)", RegexOptions.IgnoreCase);
+            Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now", RegexOptions.IgnoreCase);
             bool goodentry = false;
             if (String.IsNullOrEmpty(SipSplunkObj.splunkUrl) || !SipSplunkObj.splunkUrl.StartsWith("https://") || !Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute)){
                 while (!goodentry){
@@ -324,7 +333,7 @@ public class SipSplunk
             goodentry = false;
             if (String.IsNullOrEmpty(SipSplunkObj.user)){
                 while (!goodentry){
-                    Console.Write("Enter Splunk user : ");
+                    Console.Write("Enter Splunk user for " + SipSplunkObj.splunkUrl + " : ");
                     SipSplunkObj.user = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.user)) { goodentry = true; }
                 }
@@ -356,6 +365,16 @@ public class SipSplunk
                     Console.Write("example: search index=siplogs 2035551212 : ");
                     SipSplunkObj.searchStrg = Console.ReadLine();
                     if (SipSplunkObj.searchStrg.Contains("index=")) { goodentry = true; }
+                }
+            }
+            goodentry = false;
+            if (String.IsNullOrEmpty(SipSplunkObj.logMode) || !(SipSplunkObj.logMode.Contains("pcap") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")))
+            {
+                while (!goodentry)
+                {
+                    Console.Write("Enter the log type pcap, audiocodes or audiocodesSyslog : ");
+                    SipSplunkObj.logMode = Console.ReadLine();
+                    if (SipSplunkObj.logMode.Contains("pcap") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")) { goodentry = true; }
                 }
             }
             goodentry = false;
@@ -404,17 +423,12 @@ public class SipSplunk
             //start GUI thread
             SipSplunkObj.CallSelect(); 
         }
-        catch (Exception ex){
-            lock (_DisplayLocker){
-                Console.WriteLine("\nMessage ---\n{0}", ex.Message);
-                Console.WriteLine(
-                    "\nHelpLink ---\n{0}", ex.HelpLink);
-                Console.WriteLine("\nSource ---\n{0}", ex.Source);
-                Console.WriteLine(
-                    "\nStackTrace ---\n{0}", ex.StackTrace);
-                Console.WriteLine(
-                    "\nTargetSite ---\n{0}", ex.TargetSite);
-                Console.ReadKey(true);
+        catch (Exception ex)
+        {
+            lock (_LogLocker)
+            {
+                StreamWriter logFileSW = File.AppendText("log.txt");
+                Log(ex.ToString(), logFileSW);
             }
         }
     }    
@@ -429,6 +443,8 @@ public class SipSplunk
 
         //loop indefinately and wait for pulse from GUI thread to query again
         while (true){
+            SelectedCallsEarliestTime = DateTime.Now;
+            SelectedCallsLatestTime = DateTime.Parse("2000-01-01T00:00:00.000-05:00");
             splunkExceptions = false;
             using (Service service = new Service(new Uri(splunkUrl))) {
 
@@ -437,8 +453,19 @@ public class SipSplunk
                     SplunkReadDone = false;
                     TopLine("Connecting to splunk", 0);
                     service.LogOnAsync(user, SecureStringToString(password)).Wait();
-                    TopLine("Getting results from query " + searchStrg, 0);
-                    SplunkCallLegsQuery(service).Wait();                    
+                    TopLine("Creating splunk job " + searchStrg, 0);
+                    switch (logMode)
+                    {
+                        case "pcap":
+                            SplunkCallLegsQuery(service).Wait();
+                            break;
+                        case "audiocodes":
+                            AcSplunkCallLegsQuery(service).Wait();
+                            break;
+                        case "audiocodesSyslog":
+                            AcSyslogSplunkCallLegsQuery(service).Wait();
+                            break;
+                    }                                        
                     SplunkReadDone = true;
                 }
                 catch (AggregateException ex){
@@ -455,21 +482,18 @@ public class SipSplunk
                     }
                     else if (ex.InnerException.Message.Contains("Unknown search command"))
                     {
-                        TopLine(Regex.Match(ex.InnerException.Message, @"(?<=Search Factory: ).*\s*").ToString(), 0);
-                        
+                        TopLine(Regex.Match(ex.InnerException.Message, @"(?<=Search Factory: ).*\s*").ToString(), 0);                        
+                    }
+                    else if (ex.ToString().Contains("System.Net.WebException:"))
+                    {
+                        TopLine(Regex.Match(ex.ToString(), @"(?<=System.Net.WebException: ).*\s*").ToString(), 0);
                     }
                     else
                     {
-                        Console.WriteLine("\nMessage ---\n{0}", ex.InnerException.Message);
-                        Console.WriteLine(
-                            "\nHelpLink ---\n{0}", ex.HelpLink);
-                        Console.WriteLine("\nSource ---\n{0}", ex.InnerException.Source);
-                        Console.WriteLine(
-                            "\nStackTrace ---\n{0}", ex.InnerException.StackTrace);
-                        Console.WriteLine(
-                            "\nTargetSite ---\n{0}", ex.InnerException.TargetSite);
-                        Console.ReadKey(true);
+                        TopLine(ex.ToString(),0);
+                        
                     }
+                    Log(ex.ToString(), logFileSW);
                     splunkExceptions = true;
                     SplunkReadDone = true;
                 }
@@ -479,9 +503,9 @@ public class SipSplunk
                     {
                         if (!splunkExceptions) service.LogOffAsync().Wait();
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-
+                        Log(ex.ToString(), logFileSW);
                     }
                     okToQuerySIPmsg = true;
                 }
@@ -498,28 +522,28 @@ public class SipSplunk
     {
         try
         {
-            string fronthalf = searchStrg +" |";
-            string srcIpPortRgxStr = @"(?<SIP_SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|.)\d*(?= >))";
-            string dstIpPortRgxStr = @"(?<SIP_DstIP>(?<=> )\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|.)\d*)";
-            string requestRgxStr = @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))";
-            string callidRgxStr = @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>.*)";//do not match if -Call-ID instead of Call-ID
-            string toRgxStr = @"(?<=To:) *(\x22.+\x22)? *<?(sip:)(?<SIP_To>[^@>]+)";
-            string fromRgxStr = @"(?<=From:) *(\x22.+\x22)? *<?(sip:)(?<SIP_From>[^@>]+)";
-            string methodRgxStr = @"(?<SIP_method>^[a-zA-Z]+)";
-            string methodRex = "rex field=SIP_Req \"";
-            string backhalf = "eval timeForamted=strftime(_time, \"%Y-%m-%d %H:%M:%S.%6N%:z\")|search SIP_Req = *INVITE* OR SIP_Req =*NOTIFY* OR SIP_Req =*REGISTER* OR SIP_Req =*SUBSCRIBE*|stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_SrcIP) as Source_IP, first(SIP_DstIP) as Destination_IP, first(timeForamted)  as DateTime first(SIP_method) as Method by SIP_CallId| table DateTime, UTC, To, From, SIP_CallId, selected, Source_IP, Destination_IP, filtered, Method | sort DateTime";
+            string front = searchStrg +" |";
+            string splunkSrcIpPortRgxStr = @"(?<SIP_SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:|.)\d*(?= >)";
+            string splunkDstIpPortRgxStr = @"(?<SIP_DstIP>(?<=> )\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:|.)\d*";
+            string splunkRequestRgxStr = @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))";
+            string splunkCallidRgxStr = @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>\S*)";//do not match if -Call-ID instead of Call-ID
+            string splunkToRgxStr = @"(?<=To:)\s*(\x22.+\x22)?.*<?(sip:)(?<SIP_To>[^@>]+)";
+            string splunkFromRgxStr = @"(?<=From:)\s*(\x22.+\x22)?.*<?(sip:)(?<SIP_From>[^@>]+)";
+            string splunkMethodRgxStr = @"(?<SIP_method>^[a-zA-Z]+)";
+            string splunkMethodRex = "rex field=SIP_Req \"";
+            string back = "eval timeForamted=strftime(_time, \"%Y-%m-%d %H:%M:%S.%6N%:z\")|search SIP_Req = *INVITE* OR SIP_Req =*NOTIFY* OR SIP_Req =*REGISTER* OR SIP_Req =*SUBSCRIBE*| reverse |stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_SrcIP) as Source_IP, first(SIP_DstIP) as Destination_IP, first(timeForamted)  as DateTime last(timeForamted) as endDateTime first(SIP_method) as Method by SIP_CallId| table DateTime, UTC, To, From, SIP_CallId, selected, Source_IP, Destination_IP, endDateTime, Method | sort DateTime";
             string rex = "rex field=_raw \"";
             string rexend = "\"|";            
             var splunkJob = await service.Jobs.CreateAsync(
-                fronthalf + 
-                rex + srcIpPortRgxStr + rexend + 
-                rex + dstIpPortRgxStr + rexend + 
-                rex + requestRgxStr + rexend + 
-                rex + callidRgxStr + rexend + 
-                rex + toRgxStr + rexend + 
-                rex + fromRgxStr + rexend +
-                methodRex + methodRgxStr + rexend +
-                backhalf, 10000, ExecutionMode.Normal,
+                front + 
+                rex + splunkSrcIpPortRgxStr + rexend + 
+                rex + splunkDstIpPortRgxStr + rexend + 
+                rex + splunkRequestRgxStr + rexend + 
+                rex + splunkCallidRgxStr + rexend + 
+                rex + splunkToRgxStr + rexend + 
+                rex + splunkFromRgxStr + rexend +
+                splunkMethodRex + splunkMethodRgxStr + rexend +
+                back, splunkMaxEvents, ExecutionMode.Normal,
                 new JobArgs()
                 {
                     EarliestTime = earliest,
@@ -528,6 +552,8 @@ public class SipSplunk
                 });
 
             //loop until Job is done or cancelled 
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
             for (int count = 1; ; ++count)
             {
                 if (CancelSplunkJob)
@@ -536,7 +562,7 @@ public class SipSplunk
                     TopLine("Splunk query is canceled.", 0);
                     break;
                 }
-                if (count >= splunkMaxTime / splunkDelayInterval)
+                if (count >= splunkMaxTime / splunkStatusInterval)
                 {
                     await splunkJob.FinalizeAsync();
                     TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
@@ -547,81 +573,287 @@ public class SipSplunk
                     TopLine("Splunk query is finalized", 0);
                     break;
                 }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                }
                 try
                 {
-                    await splunkJob.TransitionAsync(DispatchState.Done, splunkDelayInterval);
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
                     break;
                 }
                 catch (TaskCanceledException)
                 {
-                    TopLine("Waiting on splunk query results " + count * 5 + " seconds", 0);
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. "+ splunkJob.DoneProgress*100 +"% Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
                 }
             }
-            TopLine("Fetching "+splunkJob.ResultCount + " results out of " + splunkJob.EventCount + " Events found", 0);
-            using (var message = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
+            elapsedTime.Restart();
+            using (var results = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
             {
-                Stream contentstream = await message.Content.ReadAsStreamAsync();
+                Stream contentstream = await results.Content.ReadAsStreamAsync();
                 StreamReader contentSR = new StreamReader(contentstream);
                 //Console.WriteLine(content);
                 String[] line = new String[5];
+                long lastElapsedMs = elapsedTime.ElapsedMilliseconds;
                 while (!contentSR.EndOfStream && !CancelSplunkJob)
                 {
+                   if ((elapsedTime.ElapsedMilliseconds - lastElapsedMs) > 5000)
+                   {
+                        lastElapsedMs = elapsedTime.ElapsedMilliseconds;
+                        string formatedString = String.Format("Fetching results from splunk job " + splunkJob.ResultCount + " results. Time elapsed: {0:hh\\:mm\\:ss}", elapsedTime.Elapsed);
+                        TopLine(formatedString, 0);
+                   }
                     line = contentSR.ReadLine().Replace("\"", "").Split(',');
 
                     //if line has a valid time stamp collect it
                     if (Regex.IsMatch(line[0], @"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}-\d{2}:\d{2}"))
                     {
                         line[1]=DateTime.Parse(line[0]).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
-                        callLegs.Add(line);
-                        lock (_DisplayLocker) if (displayMode == "calls")
-                        { // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread
-
-                            //depending on if invites, subscrptions, or registrations update the call list screen
-                            if (line[9] == methodDisplayed || (showNotify && line[9] == "NOTIFY"))
-                            {
-                                if (string.IsNullOrEmpty(filter[0]))
-                                {
-                                    CallFilter();
-                                    CallDisplay(false);
-                                }
-                                else
-                                {
-                                    bool lineContainsFilteredItem = false;
-                                    foreach (String filteritem in filter)
-                                    {
-                                        if (line.Contains(filteritem))
-                                        {
-                                            lineContainsFilteredItem = true;
-                                        }
-                                    }
-                                    if (lineContainsFilteredItem)
-                                    {
-                                        CallFilter();
-                                        CallDisplay(false);
-                                    }
-                                }
-                            }
-                        }
+                        callLegs.Add(line);                        
                     }
                 }
+                elapsedTime.Stop();
                 TopLine("Completed splunk query with "+splunkJob.ResultCount + " results out of " + splunkJob.EventCount + " Events found", 0);
+                lock (_DisplayLocker) if (displayMode == "calls")
+                { // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread                    
+                    CallFilter();
+                    CallDisplay(true);                        
+                }
             }            
         }        
         catch (Exception ex ){
-            Console.WriteLine("query exception");
-            Console.WriteLine(ex.ToString());
-            Console.WriteLine("\nMessage ---\n{0}", ex.Message);
-            Console.WriteLine(
-                "\nHelpLink ---\n{0}", ex.HelpLink);
-            Console.WriteLine("\nSource ---\n{0}", ex.Source);
-            Console.WriteLine(
-                "\nStackTrace ---\n{0}", ex.StackTrace);
-            Console.WriteLine(
-                "\nTargetSite ---\n{0}", ex.TargetSite);
-            Console.ReadKey(true);
+            if (ex.ToString().Contains("System.Net.WebException:"))
+            {
+                TopLine(Regex.Match(ex.ToString(), @"(?<=System.Net.WebException: ).*\s*").ToString(), 0);
+            }
+            else
+            {
+                TopLine(ex.Message, 0);
+            }
+            Log(ex.ToString(), logFileSW);
             splunkExceptions = true;
         }
+    }
 
+    async Task AcSplunkCallLegsQuery(Service service)
+    {
+        try
+        {
+            string query = searchStrg + " | rex field=_raw \"" + @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))" + "\" | " +
+                            "rex field=_raw \"" + @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>\S*)" + "\" | " +
+                            "rex field=SIP_Req \"(?<SIP_method>^[a-zA-Z]+)\" | " +
+                            "rex field=_raw \"\\[.*\\]\\s*\\[.*\\]\\s*(?<MGIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                            "rex field=_raw \"(?<=Incoming SIP Message from)\\s*(?<SrcIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                            "rex field=_raw \"(?<=Outgoing SIP Message to)\\s*(?<DstIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                            "rex field=_raw \"" + @"(?<=To:) *(\x22.+\x22)? *<?(sip:)(?<SIP_To>[^@>]+)" + "\" | " +
+                            "rex field=_raw \"" + @"(?<=From:) *(\x22.+\x22)? *<?(sip:)(?<SIP_From>[^@>]+)" + "\" | " +
+                            "eval timeForamted = strftime(_time, \"%Y-%m-%d %H:%M:%S.%6N%:z\") |" +
+                            "eval UTC = \"\" |" +
+                            "eval selected = \"\" |" +
+                            "eval filtered = \"\" |" +
+                            "reverse | streamstats current=f window=5 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP |" +
+                            "eval SIP_dstIP =if (prev_DstIP != \"\",prev_DstIP,MGIP) | eval SIP_srcIP =if (prev_SrcIP != \"\",prev_SrcIP,MGIP) |" +
+                            "search SIP_Req = *INVITE* OR SIP_Req = *NOTIFY* OR SIP_Req = *REGISTER* OR SIP_Req = *SUBSCRIBE* |" +
+                            "stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_srcIP) as Source_IP, first(SIP_dstIP) as Destination_IP, first(timeForamted) as DateTime first(SIP_method) as Method by SIP_CallId|" +
+                            "table DateTime,UTC,To,From,SIP_CallId,selected,Source_IP,Destination_IP,filtered,Method |" +
+                            "sort DateTime";            
+           
+            var splunkJob = await service.Jobs.CreateAsync(query, splunkMaxEvents, ExecutionMode.Normal, new JobArgs()
+                {
+                    EarliestTime = earliest,
+                    LatestTime = latest,
+                    MaxCount = splunkMaxEvents
+                });
+
+            //loop until Job is done or cancelled 
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
+            for (int count = 1; ; ++count)
+            {
+                if (CancelSplunkJob)
+                {
+                    await splunkJob.CancelAsync();
+                    TopLine("Splunk query is canceled.", 0);
+                    break;
+                }
+                if (count >= splunkMaxTime / splunkStatusInterval)
+                {
+                    await splunkJob.FinalizeAsync();
+                    TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
+                    break;
+                }
+                if (splunkJob.IsFinalized)
+                {
+                    TopLine("Splunk query is finalized", 0);
+                    break;
+                }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                }
+                try
+                {
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
+                    break;
+                }
+                catch (TaskCanceledException)
+                {
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. " + splunkJob.DoneProgress * 100 + "% Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
+                }
+            }
+            elapsedTime.Restart();
+            using (var results = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
+            {
+                Stream contentstream = await results.Content.ReadAsStreamAsync();
+                StreamReader contentSR = new StreamReader(contentstream);
+                //Console.WriteLine(content);
+                String[] line = new String[5];
+                long lastElapsedMs = elapsedTime.ElapsedMilliseconds;
+                while (!contentSR.EndOfStream && !CancelSplunkJob)
+                {
+                    if ((elapsedTime.ElapsedMilliseconds - lastElapsedMs) > 5000)
+                    {
+                        lastElapsedMs = elapsedTime.ElapsedMilliseconds;
+                        string formatedString = String.Format("Fetching results from splunk job " + splunkJob.ResultCount + " results. Time elapsed: {0:hh\\:mm\\:ss}", elapsedTime.Elapsed);
+                        TopLine(formatedString, 0);
+                    }
+                    line = contentSR.ReadLine().Replace("\"", "").Split(',');
+
+                    //if line has a valid time stamp collect it
+                    if (Regex.IsMatch(line[0], @"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}-\d{2}:\d{2}"))
+                    {
+                        line[1] = DateTime.Parse(line[0]).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
+                        callLegs.Add(line);
+                    }
+                }
+                elapsedTime.Stop();
+                TopLine("Completed splunk query with " + splunkJob.ResultCount + " results out of " + splunkJob.EventCount + " Events found", 0);
+                lock (_DisplayLocker) if (displayMode == "calls")
+                    { // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread                    
+                        CallFilter();
+                        CallDisplay(true);
+                    }
+            }
+        }
+        catch (AggregateException ex)
+        {
+
+            TopLine(ex.Message, 0);
+            Log(ex.ToString(), logFileSW);
+            splunkExceptions = true;
+        }
+    }
+
+    async Task AcSyslogSplunkCallLegsQuery(Service service)
+    {
+        try
+        {
+            string query = searchStrg + " | rex field=_raw \"" + @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))" + "\" | " +
+                            "rex field=_raw \"" + @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>\S*)" + "\" | " +
+                            "rex field=SIP_Req \"(?<SIP_method>^[a-zA-Z]+)\" | " +
+                            "rex field=_raw \"" + @"\d{2}:\d{2}:\d{2}.\d{3}\s*(?<MGIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" + "\" | " +
+                            "rex field=_raw \"(?<=Incoming SIP Message from)\\s*(?<SrcIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                            "rex field=_raw \"(?<=Outgoing SIP Message to)\\s*(?<DstIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                            "rex field=_raw \"" + @"(?<=To:) *(\x22.+\x22)? *<?(sip:)(?<SIP_To>[^@>]+)" + "\" | " +
+                            "rex field=_raw \"" + @"(?<=From:) *(\x22.+\x22)? *<?(sip:)(?<SIP_From>[^@>]+)" + "\" | " +
+                            "eval timeForamted = strftime(_time, \"%Y-%m-%d %H:%M:%S.%6N%:z\") |" +
+                            "eval UTC = \"\" |" +
+                            "eval selected = \"\" |" +
+                            "eval filtered = \"\" |" +
+                            "reverse | streamstats current=f window=5 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP |" +
+                            "eval SIP_dstIP =if (prev_DstIP != \"\",prev_DstIP,MGIP) | eval SIP_srcIP =if (prev_SrcIP != \"\",prev_SrcIP,MGIP) |" +
+                            "search SIP_Req = *INVITE* OR SIP_Req = *NOTIFY* OR SIP_Req = *REGISTER* OR SIP_Req = *SUBSCRIBE* |" +
+                            "stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_srcIP) as Source_IP, first(SIP_dstIP) as Destination_IP, first(timeForamted) as DateTime first(SIP_method) as Method by SIP_CallId|" +
+                            "table DateTime,UTC,To,From,SIP_CallId,selected,Source_IP,Destination_IP,filtered,Method |" +
+                            "sort DateTime";
+
+            var splunkJob = await service.Jobs.CreateAsync(query, splunkMaxEvents, ExecutionMode.Normal, new JobArgs()
+            {
+                EarliestTime = earliest,
+                LatestTime = latest,
+                MaxCount = splunkMaxEvents
+            });
+
+            //loop until Job is done or cancelled 
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
+            for (int count = 1; ; ++count)
+            {
+                if (CancelSplunkJob)
+                {
+                    await splunkJob.CancelAsync();
+                    TopLine("Splunk query is canceled.", 0);
+                    break;
+                }
+                if (count >= splunkMaxTime / splunkStatusInterval)
+                {
+                    await splunkJob.FinalizeAsync();
+                    TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
+                    break;
+                }
+                if (splunkJob.IsFinalized)
+                {
+                    TopLine("Splunk query is finalized", 0);
+                    break;
+                }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                }
+                try
+                {
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
+                    break;
+                }
+                catch (TaskCanceledException)
+                {
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. " + splunkJob.DoneProgress * 100 + "% Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
+                }
+            }
+            elapsedTime.Restart();
+            using (var results = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
+            {
+                Stream contentstream = await results.Content.ReadAsStreamAsync();
+                StreamReader contentSR = new StreamReader(contentstream);
+                //Console.WriteLine(content);
+                String[] line = new String[5];
+                long lastElapsedMs = elapsedTime.ElapsedMilliseconds;
+                while (!contentSR.EndOfStream && !CancelSplunkJob)
+                {
+                    if ((elapsedTime.ElapsedMilliseconds - lastElapsedMs) > 5000)
+                    {
+                        lastElapsedMs = elapsedTime.ElapsedMilliseconds;
+                        string formatedString = String.Format("Fetching results from splunk job " + splunkJob.ResultCount + " results. Time elapsed: {0:hh\\:mm\\:ss}", elapsedTime.Elapsed);
+                        TopLine(formatedString, 0);
+                    }
+                    line = contentSR.ReadLine().Replace("\"", "").Split(',');
+
+                    //if line has a valid time stamp collect it
+                    if (Regex.IsMatch(line[0], @"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}-\d{2}:\d{2}"))
+                    {
+                        line[1] = DateTime.Parse(line[0]).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
+                        callLegs.Add(line);
+                    }
+                }
+                elapsedTime.Stop();
+                TopLine("Completed splunk query with " + splunkJob.ResultCount + " results out of " + splunkJob.EventCount + " Events found", 0);
+                lock (_DisplayLocker) if (displayMode == "calls")
+                    { // displayMode CallFilter methodDisplayed showNotify CallDisplay() touched by another thread                    
+                        CallFilter();
+                        CallDisplay(true);
+                    }
+            }
+        }
+        catch (AggregateException ex)
+        {
+
+            TopLine(ex.Message, 0);
+            Log(ex.ToString(), logFileSW);
+            splunkExceptions = true;
+        }
     }
 
     void SplunkGetSIPMessages()
@@ -634,21 +866,28 @@ public class SipSplunk
         
         splunkExceptions = false;
         using (Service service = new Service(new Uri(splunkUrl)))
-        {
-
-            //login to splunk server and call SplunkQuery
+        {//login to splunk server and call SplunkQuery
             try
             {
                 SplunkReadDone = false;
                 TopLine("Connecting to splunk", 0);
                 service.LogOnAsync(user, SecureStringToString(password)).Wait();
-                TopLine("Getting results from query " + searchStrg, 0);
-                SplunkSIPMessagesQuery(service).Wait();
-                
+                TopLine("Creating splunk job  for SIP messages " + searchStrg, 0);
+                switch (logMode)
+                {
+                    case "pcap":
+                        SplunkSIPMessagesQuery(service).Wait();
+                        break;
+                    case "audiocodes":
+                        AcSplunkSIPMessagesQuery(service).Wait();
+                        break;
+                    case "audiocodesSyslog":
+                        AcSyslogSplunkSIPMessagesQuery(service).Wait();
+                        break;
+                }
             }
-            catch (AggregateException ex)
+            catch (Exception ex)
             {
-                
                 //if the wrong splunk URL
                 if (ex.ToString().Contains("System.Net.Sockets.SocketException"))
                 {
@@ -661,20 +900,12 @@ public class SipSplunk
                 }
                 else if (ex.InnerException.Message.Contains("Unknown search command"))
                 {
-                    TopLine(Regex.Match(ex.InnerException.Message, @"(?<=Search Factory: ).*\s*").ToString(), 0);
-                    
+                    TopLine(Regex.Match(ex.InnerException.Message, @"(?<=Search Factory: ).*\s*").ToString(), 0);                    
                 }
                 else
                 {
-                    Console.WriteLine("\nMessage ---\n{0}", ex.InnerException.Message);
-                    Console.WriteLine(
-                        "\nHelpLink ---\n{0}", ex.HelpLink);
-                    Console.WriteLine("\nSource ---\n{0}", ex.InnerException.Source);
-                    Console.WriteLine(
-                        "\nStackTrace ---\n{0}", ex.InnerException.StackTrace);
-                    Console.WriteLine(
-                        "\nTargetSite ---\n{0}", ex.InnerException.TargetSite);
-                    Console.ReadKey(true);
+                    TopLine(ex.InnerException.Message, 0);
+                    Log(ex.ToString(), logFileSW);
                 }
                 splunkExceptions = true;
                 SplunkReadDone = true;
@@ -685,9 +916,9 @@ public class SipSplunk
                 {
                     if (!splunkExceptions) service.LogOffAsync().Wait();
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-
+                    Log(ex.ToString(), logFileSW);
                 }
             }                
         }        
@@ -695,7 +926,7 @@ public class SipSplunk
 
     async Task SplunkSIPMessagesQuery(Service service)
     {
-        string msgSearchString = searchStrg + "|rex field=_raw \"(?<!-.{8})(?<=Call-ID:)\\s*(?<SIP_CallId>.*)\"| search ";
+        string msgSearchString = searchStrg + "|rex field=_raw \"(?<!-.{8})(?<=Call-ID:)\\s*(?<SIP_CallId>\\S*)\"| search ";
         for (int i=0;i < callIDsOfIntrest.Count;i++)
         {
             string callId = callIDsOfIntrest[i];
@@ -712,41 +943,58 @@ public class SipSplunk
             var splunkJob = await service.Jobs.CreateAsync(msgSearchString + " | dedup _raw | reverse", 0, ExecutionMode.Normal,
             new JobArgs()
             {
-                EarliestTime = earliest,
-                LatestTime = latest,
+                EarliestTime = SelectedCallsEarliestTime.ToString("O"),
+                LatestTime = SelectedCallsLatestTime.ToString("O"),
                 MaxCount = splunkMaxEvents
             });
 
-            //loop until Job is done or cancelled 
+            //loop until Job is done or cancelled
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
             for (int count = 1; ; ++count)
             {
-                if (count >= splunkMaxTime / splunkDelayInterval)
+                if (Console.KeyAvailable)
+                {
+                    if (Console.ReadKey(true).Key == ConsoleKey.Escape)
+                    {
+                        break;
+                    }
+                }
+                if (count >= splunkMaxTime / splunkStatusInterval)
                 {
                     await splunkJob.FinalizeAsync();
                     TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
+                    Log("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", logFileSW);
                     break;
                 }
                 if (splunkJob.IsFinalized)
                 {
                     TopLine("Splunk query is finalized", 0);
+                    Log("Splunk query is finalized", logFileSW);
                     break;
+                }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
                 }
                 try
                 {
-                    await splunkJob.TransitionAsync(DispatchState.Done, splunkDelayInterval);
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
                     break;
                 }
                 catch (TaskCanceledException)
                 {
-                    TopLine("Waiting on splunk query results " + count * 5 + " seconds", 0);
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. " + splunkJob.DoneProgress * 100 + "% Time elapsed: {0:hh\\:mm\\:ss} Press Esc to quit.", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
                 }
             }
-
+            elapsedTime.Restart();
             //Get results of job as stream instantiate streamreader splunkSR to read it
             if (splunkJob.IsFinalized || splunkJob.IsDone)
             {
-                TopLine("Fetching "+splunkJob.ResultCount + " results out of " + splunkJob.EventCount + " Events found", 0);           
-                
+                streamData.Clear();
+                messages.Clear();
+                selectedmessages.Clear();
                 using (var message = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Raw))
                 {
                     Stream splunkStream = await message.Content.ReadAsStreamAsync();
@@ -766,19 +1014,225 @@ public class SipSplunk
                 TopLine("Splunk query failed", 0);
             }
         }
-        catch (TaskCanceledException ex)
+        catch (Exception ex)
         {
-            Console.WriteLine("query exception");
-            Console.WriteLine(ex.ToString());
-            Console.WriteLine("\nMessage ---\n{0}", ex.Message);
-            Console.WriteLine(
-                "\nHelpLink ---\n{0}", ex.HelpLink);
-            Console.WriteLine("\nSource ---\n{0}", ex.Source);
-            Console.WriteLine(
-                "\nStackTrace ---\n{0}", ex.StackTrace);
-            Console.WriteLine(
-                "\nTargetSite ---\n{0}", ex.TargetSite);
-            Console.ReadKey(true);
+            Log(ex.ToString(), logFileSW);
+            splunkExceptions = true;
+        }
+    }
+
+    async Task AcSplunkSIPMessagesQuery(Service service)
+    {
+        string msgSearchString = searchStrg +
+                "| rex field=_raw \"" + @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))" + "\" | " +
+                "rex field=_raw \"" + @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>\S*)" + "\" | " +
+                "rex field=SIP_Req \"(?<SIP_method>^[a-zA-Z]+)\" | " +
+                "rex field=_raw \"\\[.*\\]\\s*\\[.*\\]\\s*(?<MGIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                "rex field=_raw \"(?<=Incoming SIP Message from)\\s*(?<SrcIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                "rex field=_raw \"(?<=Outgoing SIP Message to)\\s*(?<DstIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                "reverse |streamstats current=f window=5 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP | " +
+                "eval SIP_dstIP=if(prev_DstIP != \"\",prev_DstIP,MGIP) | eval SIP_srcIP=if(prev_SrcIP != \"\",prev_SrcIP,MGIP) | " +
+                "search ";
+        string msgSearchStringEnd = " | eval srcIpOut=\"srcip=\"+SIP_srcIP | eval dstIpOut=\"dstip=\"+SIP_dstIP |" +                
+                "table srcIpOut,dstIpOut,_raw | ";
+        for (int i = 0; i < callIDsOfIntrest.Count; i++)
+        {
+            string callId = callIDsOfIntrest[i];
+            msgSearchString += ("SIP_CallId=" + callId);
+            if (i < callIDsOfIntrest.Count - 1)
+            {
+                msgSearchString += " OR ";
+            }
+        }
+
+        // create splunk job
+        try
+        {
+            var splunkJob = await service.Jobs.CreateAsync(msgSearchString + msgSearchStringEnd, 0, ExecutionMode.Normal,
+            new JobArgs()
+            {
+                EarliestTime = SelectedCallsEarliestTime.ToString("O"),
+                LatestTime = SelectedCallsLatestTime.ToString("O"),
+                MaxCount = splunkMaxEvents
+            });
+
+            //loop until Job is done or cancelled
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
+            for (int count = 1; ; ++count)
+            {
+                if (Console.KeyAvailable)
+                {
+                    if (Console.ReadKey(true).Key == ConsoleKey.Escape)
+                    {
+                        break;
+                    }
+                }
+                if (count >= splunkMaxTime / splunkStatusInterval)
+                {
+                    await splunkJob.FinalizeAsync();
+                    TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
+                    Log("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", logFileSW);
+                    break;
+                }
+                if (splunkJob.IsFinalized)
+                {
+                    TopLine("Splunk query is finalized", 0);
+                    break;
+                }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                }
+                try
+                {
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
+                    break;
+                }
+                catch (TaskCanceledException)
+                {
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. " + splunkJob.DoneProgress * 100 + "% Time elapsed: {0:hh\\:mm\\:ss} Press Esc to quit.", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
+                }
+            }
+            elapsedTime.Restart();
+            //Get results of job as stream instantiate streamreader splunkSR to read it
+            if (splunkJob.IsFinalized || splunkJob.IsDone)
+            {
+                streamData.Clear();
+                messages.Clear();
+                selectedmessages.Clear();
+                using (var message = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
+                {
+                    Stream splunkStream = await message.Content.ReadAsStreamAsync();
+                    splunkSIPmessageSR = new StreamReader(splunkStream);
+                    currentSplunkLoadProg = 0;
+                    while (!splunkSIPmessageSR.EndOfStream)
+                    {
+                        AcReadData();
+                    }
+                    splunkSIPmessageSR.Close();
+                }
+                if (!splunkExceptions) TopLine("Completed splunk query with " + streamData.Count() + " lines of data", 0);
+                SplunkReadDone = true;
+            }
+            else
+            {
+                TopLine("Splunk query failed", 0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(ex.ToString(), logFileSW);
+            splunkExceptions = true;
+        }
+    }
+
+    async Task AcSyslogSplunkSIPMessagesQuery(Service service)
+    {
+        string msgSearchString = searchStrg +
+                "| rex field=_raw \"" + @"(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))" + "\" | " +
+                "rex field=_raw \"" + @"(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>\S*)" + "\" | " +
+                "rex field=SIP_Req \"(?<SIP_method>^[a-zA-Z]+)\" | " +
+                "rex field=_raw \""+ @"\d{2}:\d{2}:\d{2}.\d{3}\s*(?<MGIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" + "\" | " +
+                "rex field=_raw \"(?<=Incoming SIP Message from)\\s*(?<SrcIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                "rex field=_raw \"(?<=Outgoing SIP Message to)\\s*(?<DstIP>\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})\" | " +
+                "reverse |streamstats current=f window=5 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP | " +
+                "eval SIP_dstIP=if(prev_DstIP != \"\",prev_DstIP,MGIP) | eval SIP_srcIP=if(prev_SrcIP != \"\",prev_SrcIP,MGIP) | " +
+                "search ";
+        string msgSearchStringEnd = " | eval srcIpOut=\"srcip=\"+SIP_srcIP | eval dstIpOut=\"dstip=\"+SIP_dstIP |" +
+                "table srcIpOut,dstIpOut,_raw | ";
+                
+        for (int i = 0; i < callIDsOfIntrest.Count; i++)
+        {
+            string callId = callIDsOfIntrest[i];
+            msgSearchString += ("SIP_CallId=" + callId);
+            if (i < callIDsOfIntrest.Count - 1)
+            {
+                msgSearchString += " OR ";
+            }
+        }
+
+        // create splunk job
+        try
+        {
+            
+            var splunkJob = await service.Jobs.CreateAsync(msgSearchString + msgSearchStringEnd, 0, ExecutionMode.Normal,
+            new JobArgs()
+            {
+                EarliestTime = SelectedCallsEarliestTime.ToString("O"),
+                LatestTime = SelectedCallsLatestTime.ToString("O"),
+                MaxCount = splunkMaxEvents
+            });
+
+            //loop until Job is done or cancelled
+            Stopwatch elapsedTime = new Stopwatch();
+            elapsedTime.Start();
+            for (int count = 1; ; ++count)
+            {
+                if (Console.KeyAvailable)
+                {
+                    if (Console.ReadKey(true).Key == ConsoleKey.Escape)
+                    {
+                        break;
+                    }
+                }
+                if (count >= splunkMaxTime / splunkStatusInterval)
+                {
+                    await splunkJob.FinalizeAsync();
+                    TopLine("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", 0);
+                    Log("Exceeded maximum wait time of " + splunkMaxTime / 1000 + " seconds. Finalizing...", logFileSW);
+                    break;
+                }
+                if (splunkJob.IsFinalized)
+                {
+                    TopLine("Splunk query is finalized", 0);
+                    break;
+                }
+                if (splunkJob.DispatchState == DispatchState.Finalizing)
+                {
+                    string formatedString = String.Format("Splunk job " + splunkJob.Sid + " Finalizing. Time elapsed: {0:hh\\:mm\\:ss} ", elapsedTime.Elapsed);
+                }
+                try
+                {
+                    await splunkJob.TransitionAsync(DispatchState.Done, splunkStatusInterval);
+                    break;
+                }
+                catch (TaskCanceledException)
+                {
+                    string formatedString = String.Format("Waiting on splunk job " + splunkJob.Sid + " to complete. " + splunkJob.DoneProgress * 100 + "% Time elapsed: {0:hh\\:mm\\:ss} Press Esc to quit.", elapsedTime.Elapsed);
+                    TopLine(formatedString, 0);
+                }
+            }
+            elapsedTime.Restart();
+            //Get results of job as stream instantiate streamreader splunkSR to read it
+            if (splunkJob.IsFinalized || splunkJob.IsDone)
+            {
+                streamData.Clear();
+                messages.Clear();
+                selectedmessages.Clear();
+                using (var message = await splunkJob.GetSearchResponseMessageAsync(outputMode: OutputMode.Csv))
+                {
+                    Stream splunkStream = await message.Content.ReadAsStreamAsync();
+                    splunkSIPmessageSR = new StreamReader(splunkStream);
+                    currentSplunkLoadProg = 0;
+                    while (!splunkSIPmessageSR.EndOfStream)
+                    {
+                        AcSyslogReadData();
+                    }
+                    splunkSIPmessageSR.Close();
+                }
+                if (!splunkExceptions) TopLine("Completed splunk query with " + streamData.Count() + " lines of data", 0);
+                SplunkReadDone = true;
+            }
+            else
+            {
+                TopLine("Splunk query failed", 0);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(ex.ToString(), logFileSW);
             splunkExceptions = true;
         }
     }
@@ -794,10 +1248,8 @@ public class SipSplunk
                 outputarray[0] = currentSplunkLoadProg.ToString();
                 outputarray[1] = dateRgx.Match(line).ToString();
                 outputarray[2] = DateTime.Parse(dateRgx.Match(line).ToString()).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
-                if (IncludePorts) { outputarray[3] = srcIpPortRgx.Match(line).ToString(); }
-                else { outputarray[3] = srcIpRgx.Match(line).ToString(); }                               //src IP                                                                        
-                if (IncludePorts) { outputarray[4] = dstIpPortRgx.Match(line).ToString(); }
-                else { outputarray[4] = dstIpRgx.Match(line).ToString(); }
+                outputarray[3] = srcIpRgx.Match(line).ToString();                              //src IP                                                                        
+                outputarray[4] = dstIpRgx.Match(line).ToString(); 
                 line = GetNextLine();
                 if (line == null) { break; }
                 
@@ -813,16 +1265,15 @@ public class SipSplunk
                 Match serv;
                 
                 //untill the begining of the next msg
-                while (!beginmsgRgx.IsMatch(line)){
-                    
-                    //match line against regexs
+                while (!beginmsgRgx.IsMatch(line))
+                { //match line against regexs
                     switch (line){
                         case string s when (sipTwoDotO = requestRgx.Match(s)) != Match.Empty:
                             outputarray[5] = sipTwoDotO.ToString();
                             sipTwoDotOfound = true;
                             break;
                         case string s when (callid = callidRgx.Match(s)) != Match.Empty:
-                            outputarray[6] = callid.ToString().Trim();
+                            outputarray[6] = callid.Groups[1].ToString();
                             break;
                         case string s when (cseq = cseqRgx.Match(s)) != Match.Empty:
                             outputarray[17] = cseq.Groups[2].ToString();
@@ -871,11 +1322,7 @@ public class SipSplunk
                     lock (_DataLocker) //messages touched by another thread 
                     {
                         messages.Add(outputarray);                        
-                    }
-                        lock (_DisplayLocker) if (displayMode == "flow")
-                    {
-                        Flow(true);
-                    }
+                    }                        
                 }
             }
         }
@@ -884,18 +1331,216 @@ public class SipSplunk
         }
     }
 
+    void AcReadData()
+    {
+        string line = GetNextLine();
+        if (line != null)
+        {
+            while (!string.IsNullOrEmpty(line) && acBeginMsgRgx.IsMatch(line))
+            {
+                
+                String[] outputarray = new String[18];
+
+                // get the index of the start of the msg
+                outputarray[0] = currentSplunkLoadProg.ToString(); 
+                outputarray[1] = acBeginMsgRgx.Match(line).Groups["timedate"].ToString(); 
+                outputarray[2] = DateTime.Parse(acBeginMsgRgx.Match(line).Groups["timedate"].ToString()).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture); 
+                outputarray[3] = acBeginMsgRgx.Match(line).Groups["SrcIP"].ToString(); //src IP                                                                        
+                outputarray[4] = acBeginMsgRgx.Match(line).Groups["DstIP"].ToString(); 
+                outputarray[5] = acBeginMsgRgx.Match(line).Groups["req"].ToString(); 
+                line = GetNextLine();               
+
+                //check to match these only once. no need match a field if it is already found                
+                Match callid;
+                Match cseq;
+                Match to;
+                Match from; ;
+                Match SDPIP;
+                Match ua;
+                Match serv;
+
+                //untill the begining of the next msg
+                while (!acBeginMsgRgx.IsMatch(line))
+                { //match line against regexs
+                    switch (line)
+                    {
+                        case string s when (callid = callidRgx.Match(s)) != Match.Empty:
+                            outputarray[6] = callid.Groups[1].ToString(); 
+                            break;
+                        case string s when (cseq = cseqRgx.Match(s)) != Match.Empty:
+                            outputarray[17] = cseq.Groups[2].ToString(); 
+                            break;
+                        case string s when (to = toRgx.Match(s)) != Match.Empty:
+                            outputarray[7] = to.Groups[1].ToString() + to.Groups[3].ToString(); 
+                            break;
+                        case string s when (from = fromRgx.Match(s)) != Match.Empty:
+                            outputarray[8] = from.Groups[1].ToString() + from.Groups[3].ToString(); 
+                            break;
+                        case string s when s.Contains("Content-Type: application/sdp"):
+                            outputarray[11] = " SDP"; 
+                            break;
+                        case string s when (SDPIP = SDPIPRgx.Match(s)) != Match.Empty:
+                            outputarray[13] = SDPIP.ToString(); 
+                            break;
+                        case string s when mAudioRgx.IsMatch(s):
+                            outputarray[14] = portRgx.Match(s).ToString().Trim();
+                            outputarray[15] = codecRgx.Match(s).ToString().Trim();
+                            if (outputarray[15] == "0") { outputarray[15] = "G711u"; }
+                            else if (outputarray[15] == "8") { outputarray[15] = "G711a"; }
+                            else if (outputarray[15] == "9") { outputarray[15] = "G722"; }
+                            else if (outputarray[15] == "18") { outputarray[15] = "G729"; }
+                            else { outputarray[15] = "rtp-payload type:" + outputarray[15]; }
+                            break;
+                        case string s when (ua = uaRgx.Match(s)) != Match.Empty:
+                            outputarray[16] = ua.ToString().Trim();
+                            break;
+                        case string s when (serv = serverRgx.Match(s)) != Match.Empty:
+                            outputarray[16] = serv.ToString().Trim();
+                            break;
+                        case string s when occasRgx.IsMatch(s):
+                            outputarray[16] = "occas";
+                            break;
+                    }
+                    line = GetNextLine();
+                    if (line == null) { break; }
+                }
+
+                // get the index of the end of the msg
+                outputarray[9] = currentSplunkLoadProg.ToString();
+                outputarray[10] = "Gray";
+                outputarray[12] = "splunk"; //add file name 
+                if (outputarray[5] == null) { outputarray[5] = "Invalid SIP characters"; }                
+                lock (_DataLocker) //messages touched by another thread 
+                {
+                    messages.Add(outputarray);
+                }                
+            }
+        }
+        else
+        {
+            currentSplunkLoadProg++;
+        }
+    }
+
+    void AcSyslogReadData()
+    {
+        string line = GetNextLine();
+        if (line != null)
+        {
+            while (!string.IsNullOrEmpty(line) && acSyslogBeginMsgRgx.IsMatch(line))
+            {
+
+                String[] outputarray = new String[18];
+                string milliSeconds;
+                string yearStrg;
+
+                // get the index of the start of the msg
+                outputarray[0] = currentSplunkLoadProg.ToString();
+                //outputarray[1] = acBeginMsgRgx.Match(line).Groups["timedate"].ToString();
+                milliSeconds = acSyslogBeginMsgRgx.Match(line).Groups["ms"].ToString();
+                
+                outputarray[3] = acSyslogBeginMsgRgx.Match(line).Groups["SrcIP"].ToString(); //src IP                                                                        
+                outputarray[4] = acSyslogBeginMsgRgx.Match(line).Groups["DstIP"].ToString();
+                outputarray[5] = acSyslogBeginMsgRgx.Match(line).Groups["req"].ToString();
+                line = GetNextLine();
+
+                //check to match these only once. no need match a field if it is already found                
+                Match callid;
+                Match cseq;
+                Match to;
+                Match from; ;
+                Match SDPIP;
+                Match ua;
+                Match serv;
+                Match timeMatch;
+
+                //untill the begining of the next msg
+                while (!acSyslogBeginMsgRgx.IsMatch(line))
+                { //match line against regexs
+                    switch (line)
+                    {
+                        case string s when (callid = callidRgx.Match(s)) != Match.Empty:
+                            outputarray[6] = callid.Groups[1].ToString();
+                            break;
+                        case string s when (cseq = cseqRgx.Match(s)) != Match.Empty:
+                            outputarray[17] = cseq.Groups[2].ToString();
+                            break;
+                        case string s when (to = toRgx.Match(s)) != Match.Empty:
+                            outputarray[7] = to.Groups[1].ToString() + to.Groups[3].ToString();
+                            break;
+                        case string s when (from = fromRgx.Match(s)) != Match.Empty:
+                            outputarray[8] = from.Groups[1].ToString() + from.Groups[3].ToString();
+                            break;
+                        case string s when s.Contains("Content-Type: application/sdp"):
+                            outputarray[11] = " SDP";
+                            break;
+                        case string s when (SDPIP = SDPIPRgx.Match(s)) != Match.Empty:
+                            outputarray[13] = SDPIP.ToString();
+                            break;
+                        case string s when mAudioRgx.IsMatch(s):
+                            outputarray[14] = portRgx.Match(s).ToString().Trim();
+                            outputarray[15] = codecRgx.Match(s).ToString().Trim();
+                            if (outputarray[15] == "0") { outputarray[15] = "G711u"; }
+                            else if (outputarray[15] == "8") { outputarray[15] = "G711a"; }
+                            else if (outputarray[15] == "9") { outputarray[15] = "G722"; }
+                            else if (outputarray[15] == "18") { outputarray[15] = "G729"; }
+                            else { outputarray[15] = "rtp-payload type:" + outputarray[15]; }
+                            break;
+                        case string s when (ua = uaRgx.Match(s)) != Match.Empty:
+                            outputarray[16] = ua.ToString().Trim();
+                            break;
+                        case string s when (serv = serverRgx.Match(s)) != Match.Empty:
+                            outputarray[16] = serv.ToString().Trim();
+                            break;
+                        case string s when occasRgx.IsMatch(s):
+                            outputarray[16] = "occas";
+                            break;
+                        case string s when (timeMatch = acSyslogTimeRgx.Match(s)) != Match.Empty:
+                            if (Int32.Parse(timeMatch.Groups["month"].ToString()) >= DateTime.Now.Month)
+                            {
+                                yearStrg = (DateTime.Now.Year - 1).ToString();
+                            }
+                            else
+                            {
+                                yearStrg = (DateTime.Now.Year).ToString();
+                            }
+                            outputarray[1] = yearStrg+"-"+timeMatch.Groups["month"].ToString()+"-"+ timeMatch.Groups["day"].ToString()+"T" + timeMatch.Groups["time"].ToString()+"."+ milliSeconds+"-05:00";
+                            outputarray[2] = DateTime.Parse(outputarray[1]).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
+                            break;
+                    }
+                    line = GetNextLine();
+                    if (line == null) { break; }
+                }
+
+                // get the index of the end of the msg
+                outputarray[9] = currentSplunkLoadProg.ToString();
+                outputarray[10] = "Gray";
+                outputarray[12] = "splunk"; //add file name 
+                if (outputarray[5] == null) { outputarray[5] = "Invalid SIP characters"; }
+                lock (_DataLocker) //messages touched by another thread 
+                {
+                    messages.Add(outputarray);
+                }
+            }
+        }
+        else
+        {
+            currentSplunkLoadProg++;
+        }
+    }
+
     string GetNextLine()
     {
         string line;
         line = splunkSIPmessageSR.ReadLine();
+       
         lock (_DataLocker) streamData.Add(line);  //touched by another threAD
         currentSplunkLoadProg++;
         return line;
     }
 
     void CallSelect()
-    {
-        //call display 
+    { //call display 
         bool done = false;
         CallListPosition = 0;
         CallDisplay(true);
@@ -990,11 +1635,20 @@ public class SipSplunk
                     Console.CursorTop = Console.CursorTop - 1;
                 }
                 lock (_DataLocker) callIDsOfIntrest.Clear();
-
+                SelectedCallsEarliestTime = DateTime.Now;
+                SelectedCallsLatestTime = DateTime.Parse("2000-01-01T00:00:00.000-05:00");
                 //find the selected calls from the call Legs Displayed
                 lock (_DataLocker) for (int i = 0; i < callLegs.Count; i++){
                     if (callLegs[i][5] == "*"){
                         callIDsOfIntrest.Add(callLegs[i][4]);           //get the callIDs from the selected calls and add them to callIDsOfIntrest
+                        if (DateTime.Parse(callLegs[i][0]) < SelectedCallsEarliestTime)
+                        {
+                            SelectedCallsEarliestTime = DateTime.Parse(callLegs[i][0]);
+                        }
+                        if (DateTime.Parse(callLegs[i][8]) > SelectedCallsLatestTime)
+                        {
+                              SelectedCallsLatestTime = DateTime.Parse(callLegs[i][0]);
+                        }
                     }
                 }
             }
@@ -1106,8 +1760,8 @@ public class SipSplunk
                 Console.ForegroundColor = fieldConsoleTxtClr;
                 Console.SetWindowPosition(0, 0);
                 Console.SetCursorPosition(0, 1);
-                Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)", RegexOptions.IgnoreCase);
-                Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now", RegexOptions.IgnoreCase);
+                Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)", RegexOptions.IgnoreCase);
+                Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now", RegexOptions.IgnoreCase);
                 bool goodentry = false;
                 while (!goodentry) {
                     Console.Write("Enter Splunk API URL [{0}]: ", splunkUrl);
@@ -1150,6 +1804,14 @@ public class SipSplunk
                     if (!string.IsNullOrEmpty(searchStrgEntry)) { searchStrg = searchStrgEntry; }
                     if (!string.IsNullOrEmpty(searchStrg) || searchStrg.Contains("index=")) { goodentry = true; }
                 }
+                goodentry = false;                
+                while (!goodentry)
+                {
+                    Console.Write("Enter the log type pcap, audiocodes or audiocodesSyslog [{0}]: ", logMode);
+                    string logModeEntry = Console.ReadLine();
+                    if (!string.IsNullOrEmpty(logModeEntry)) { logMode = logModeEntry; }
+                    if (logMode.Contains("pcap") || logMode.Contains("audiocodes") || logMode.Contains("audiocodesSyslog")) { goodentry = true; }
+                }                
                 goodentry = false;
                 bool goodTimeEntry = false;
                 while (!goodTimeEntry){
@@ -1166,7 +1828,7 @@ public class SipSplunk
                         if (!string.IsNullOrEmpty(latestEntry)) { latest = latestEntry; }
                         if (latestTimeAndDateRGX.IsMatch(latest)) { goodentry = true; }
                     }
-                    if (Regex.IsMatch(latest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}") && Regex.IsMatch(earliest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}-\d{2}:\d{2}")) {
+                    if (Regex.IsMatch(latest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}") && Regex.IsMatch(earliest, @"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}")) {
                         if (DateTime.Parse(earliest) > DateTime.Parse(latest)) {
                             Console.Write("start time is later than end time");
                             earliest = "";
@@ -1240,6 +1902,7 @@ public class SipSplunk
                             flowConfigFileWriter.WriteLine(searchStrg);
                             flowConfigFileWriter.WriteLine(earliest);
                             flowConfigFileWriter.WriteLine(latest);
+                            flowConfigFileWriter.WriteLine(logMode);
                             flowConfigFileWriter.Close();
                         }
                         catch (IOException e){
@@ -1486,8 +2149,8 @@ public class SipSplunk
             }
             string footerTwo = "Number of SIP transactions found : " + callLegs.Count.ToString();
             string footerThree = CallInvites.ToString() + " SIP INVITEs found | " + notifications.ToString() + " SIP NOTIFYs found | " + registrations.ToString() + " SIP REGISTERs found | " + subscriptions.ToString() + " SIP SUBSCRIBEs found";            
-            WriteScreen(footerTwo + new String(' ', Console.BufferWidth - footerTwo.Length), 0, (short)(callLegsDisplayed.Count + 5), footerTxtClr, footerBkgrdClr);
-            WriteScreen(footerThree + new String(' ', Console.BufferWidth - footerThree.Length), 0, (short)(callLegsDisplayed.Count + 6), footerTxtClr, footerBkgrdClr);            
+            WriteScreen(footerTwo + new String(' ', Console.BufferWidth - footerTwo.Length), 0, (short)(callLegsDisplayed.Count + 4), footerTxtClr, footerBkgrdClr);
+            WriteScreen(footerThree + new String(' ', Console.BufferWidth - footerThree.Length), 0, (short)(callLegsDisplayed.Count + 5), footerTxtClr, footerBkgrdClr);            
             if (callLegsDisplayed.Count > 0) {
                 Console.SetCursorPosition(0, CallListPosition + 4);
                 Console.BackgroundColor = fieldConsoleTxtClr;
@@ -1891,6 +2554,7 @@ public class SipSplunk
         SelectMessages();
         if (selectedmessages.Count == 0)
         {
+            Log("No Messages were found when trying to render the flow", logFileSW);
             return;
         }
         GetIps();              //get the IP addresses of the selected SIP messages for the top of the screen  and addedto the IPsOfIntrest 
@@ -2319,9 +2983,9 @@ public class SipSplunk
         WriteLineConsole("", TxtColor, BkgrdColor);
     }
 
-    void DisplayMessage(int msgindxselected, List<string[]> messages){
-        int msgStartIdx = Int32.Parse(messages[msgindxselected][0]);
-        int msgEndIdx = Int32.Parse(messages[msgindxselected][9]);
+    void DisplayMessage(int msgindxselected, List<string[]> inputMessages){
+        int msgStartIdx = Int32.Parse(inputMessages[msgindxselected][0]);
+        int msgEndIdx = Int32.Parse(inputMessages[msgindxselected][9]);
         if ((msgEndIdx - msgStartIdx) > Console.BufferHeight) {
             Console.BufferHeight = Math.Max(Math.Min(5 + (Int16)(msgEndIdx - msgStartIdx), Int16.MaxValue - 1), Console.BufferHeight);
         }
@@ -2330,7 +2994,7 @@ public class SipSplunk
         fakeCursor[0] = 0; fakeCursor[1] = 1;
         string line = "";
         if (writeFlowToFile) {
-            flowFileWriter.Write("<a name = \"" + messages[msgindxselected][0] + "\">");
+            flowFileWriter.Write("<a name = \"" + inputMessages[msgindxselected][0] + "\">");
             flowFileWriter.WriteLine(line);
         }
         else{
@@ -2346,7 +3010,7 @@ public class SipSplunk
         }
         if (writeFlowToFile){
             flowFileWriter.Write("</a>");
-            flowFileWriter.Write("<a href= \"#flow" + messages[msgindxselected][0] + "\">Back</a>");
+            flowFileWriter.Write("<a href= \"#flow" + inputMessages[msgindxselected][0] + "\">Back</a>");
             flowFileWriter.WriteLine("</br>");
             flowFileWriter.WriteLine("<hr>");
             flowFileWriter.WriteLine("</br>");
@@ -2522,7 +3186,7 @@ public class SipSplunk
         lock (_DisplayLocker){
             ConsoleBuffer.SetAttribute(x, 0, line.Length, (short)(statusBarTxtClr + (short)(((short)statusBarBkgrdClr) * 16)));
             ConsoleBuffer.WriteAt(x, 0, displayLine);
-        }
+        }        
     }
 
     void WriteScreen(string line, short x, short y, AttrColor attr, AttrColor bkgrd){
@@ -2611,6 +3275,19 @@ public class SipSplunk
             Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
         }
     }
+
+    public static void Log(string logMessage, TextWriter w)
+    {
+        lock (_LogLocker)
+        {
+            w.Write("\r\nLog Entry : ");
+            w.WriteLine("{0} {1}", DateTime.Now.ToLongTimeString(),
+                DateTime.Now.ToLongDateString());
+            w.WriteLine("  :");
+            w.WriteLine("  :{0}", logMessage);
+            w.WriteLine("-------------------------------");
+        }
+    }
 }
 
 public class ConsoleBuffer{
@@ -2642,6 +3319,7 @@ public class ConsoleBuffer{
         WriteConsoleOutputAttribute(_hBuffer, attrs, length, new Coord(x, y), ref n);
     }
 
+    
 
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern SafeFileHandle GetStdHandle(int nStdHandle);
@@ -2710,16 +3388,6 @@ public class ConsoleBuffer{
 }
 
 
-[Serializable]
-public class MyException : Exception
-{
-    public MyException() { }
-    public MyException(string message) : base(message) { }
-    public MyException(string message, Exception inner) : base(message, inner) { }
-    protected MyException(
-      System.Runtime.Serialization.SerializationInfo info,
-      System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
-}
 /*
 index=siplog | 
 rex field=_raw "(?<SIP_SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|.)\d*(?= >))"|
@@ -2738,36 +3406,34 @@ stats first(SIP_To) as To, first(SIP_From) as From, first(SIP_SrcIP) as Source_I
 table DateTime,UTC,To,From,SIP_CallId,selected,Source_IP,Destination_IP,filtered,Method|
 sort DateTime
 
-//  date and time stamp [0]
-//  UTC [1]
-//  To: [2]
-//  From: [3]
-//  Call-ID [4]
-//  selected [5]
-//  src ip [6]
-//  dst ip [7]
-//  filtered [8]
-//  method(invite,notify,registraion,supscription) [9]
+    for inbound audiocods syslog to get the source IP from the previous event | rex field=_raw "(?<=Incoming SIP Message from)\s*(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6})" | reverse |streamstats current=f window=1 last(SrcIP) as prev_SrcIP
+    for outbound 
+    Sent:2018-06-18T09:21:44.916-04:00 Recv:2018-06-18T09:21:44.916-04:00 [local0] [notice] 10.232.244.20 [S=2409160] [SID=9610bc:11:1031159]  (      lgr_flow)(   2411058)   ---- Outgoing SIP Message to 10.232.244.10:5060 from SIPInterface #0 (SIPInterface_0) UdpTransportObject(#0)-UdpSocketAPI(#0) ----
+    rex field=_raw "(?<=Outgoing SIP Message to)\s*(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6})"
+    
+    index="eventsnap" source=*everything.log* 2779429 |rex field=_raw "\[.*\]\s*\[.*\]\s*(?<MGIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" | rex field=_raw "(?<=Incoming SIP Message from)\s*(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6})" |rex field=_raw "(?<=Outgoing SIP Message to)\s*(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,6})"| reverse |streamstats current=f window=1 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP | eval SIP_dstIP=if(prev_DstIP != "",prev_DstIP,MGIP) | eval SIP_srcIP=if(prev_SrcIP != "",prev_SrcIP,MGIP)
 
-    List<string[]> messages = new List<string[]>();
-    //  index start of msg[0] 
-    //  date and time stamp[1] 
-    //  UTC[2]
-    //  src IP[3]
-    //  dst IP[4] 
-    //  Request/Method line of SIP msg[5] 
-    //  Call-ID[6]
-    //  To:[7]  
-    //  From:[8]
-    //  index end of msg[9]
-    //  color [10]
-    //  SDP [11]
-    //  filename [12]
-    //  SDP IP [13]
-    //  SDP port [14]
-    //  SDP codec [15]
-    //  useragent or server[16]
-    //  CSeq [17]
+index="eventsnap" source=*everything.log*|
+rex field=_raw "(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))"|
+rex field=_raw "(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>.*)"|
+rex field=SIP_Req "(?<SIP_method>^[a-zA-Z]+)"|
+rex field=_raw "\[.*\]\s*\[.*\]\s*(?<MGIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" | 
+rex field=_raw "(?<=Incoming SIP Message from)\s*(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" |
+rex field=_raw "(?<=Outgoing SIP Message to)\s*(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"| 
+reverse |streamstats current=f window=1 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP | 
+eval SIP_dstIP=if(prev_DstIP != "",prev_DstIP,MGIP) | eval SIP_srcIP=if(prev_SrcIP != "",prev_SrcIP,MGIP) |
+search SIP_Req = *INVITE* OR SIP_Req =*NOTIFY* OR SIP_Req =*REGISTER* OR SIP_Req =*SUBSCRIBE* | 
+stats first(SIP_srcIP) as Source_IP, first(SIP_dstIP) as Destination_IP, first(_raw) as Raw by SIP_CallId | 
+table Source_IP,Destination_IP,Raw | 
+sort DateTime
 
+index=acsbc2 |rex field=_raw "(?<SIP_Req>ACK.*SIP\/2\.0|BYE.*SIP\/2\.0|CANCEL.*SIP\/2\.0|INFO.*SIP\/2\.0|INVITE.*SIP\/2\.0|MESSAGE.*SIP\/2\.0|NOTIFY.*SIP\/2\.0|OPTIONS.*SIP\/2\.0|PRACK.*SIP\/2\.0|PUBLISH.*SIP\/2\.0|REFER.*SIP\/2\.0|REGISTER.*SIP\/2\.0|SUBSCRIBE.*SIP\/2\.0|UPDATE.*SIP\/2\.0|SIP\/2\.0 \d{3}(\s*\w*))"|
+rex field=_raw "(?<!-.{8})(?<=Call-ID:)\s*(?<SIP_CallId>.*)"|
+rex field=SIP_Req "(?<SIP_method>^[a-zA-Z]+)"|
+rex field=_raw "\d{2}:\d{2}:\d{2}.\d{3}\s*(?<MGIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" | 
+rex field=_raw "(?<=Incoming SIP Message from)\s*(?<SrcIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})" |
+rex field=_raw "(?<=Outgoing SIP Message to)\s*(?<DstIP>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"| 
+reverse |streamstats current=f window=1 last(DstIP) as prev_DstIP last(SrcIP) as prev_SrcIP | 
+eval SIP_dstIP=if(prev_DstIP != "",prev_DstIP,MGIP) | eval SIP_srcIP=if(prev_SrcIP != "",prev_SrcIP,MGIP)
 
 */
