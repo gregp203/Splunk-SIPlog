@@ -237,7 +237,7 @@ public class SipSplunk
     {
         try
         {
-            float version = 1.5f;
+            string version = "1.5.1";
             string dotNetVersion = Environment.Version.ToString();
             if (Console.BufferWidth < 200) { Console.BufferWidth = 200; }
             Console.Clear();
@@ -251,7 +251,7 @@ public class SipSplunk
             Console.WriteLine(@" |_____/|_____|_|    |_|\___/ \__, | |___/ .__/|_|\__,_|_| |_|_|\_\    ");
             Console.WriteLine(@"                              __ / |     | |                           ");
             Console.WriteLine(@"                             | ___/      |_|                           ");
-            Console.WriteLine("                                              Version {0} Greg Palmer   ", version.ToString());
+            Console.WriteLine("                                              Version {0} Greg Palmer   ", version);
             Console.WriteLine();
             Console.WriteLine();
 
@@ -320,12 +320,16 @@ public class SipSplunk
             */
             
             //test if the loaded info is correct and if not or is missing prompt for it
-            Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)", RegexOptions.IgnoreCase);
-            Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|m|q|y)|now", RegexOptions.IgnoreCase);
+            Regex earliestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|M|q|y)", RegexOptions.IgnoreCase);
+            Regex latestTimeAndDateRGX = new Regex(@"\d{4}-\d{2}-\d{1,2}T\d{2}:\d{2}:\d{2}.\d{3}(-|\+)\d{2}:\d{2}|-\d{1,3}\s*(s|m|h|d|w|M|q|y)|now", RegexOptions.IgnoreCase);
             bool goodentry = false;
             if (String.IsNullOrEmpty(SipSplunkObj.splunkUrl) || !SipSplunkObj.splunkUrl.StartsWith("https://") || !Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute)){
                 while (!goodentry){
                     Console.Write("Enter Splunk API URL ex. https://10.0.0.1:8089/ : ");
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.Write("https://");
+                    Console.CursorLeft -= 8;
+                    Console.ForegroundColor = ConsoleColor.Gray;
                     SipSplunkObj.splunkUrl = Console.ReadLine();
                     if (!String.IsNullOrEmpty(SipSplunkObj.splunkUrl) && SipSplunkObj.splunkUrl.StartsWith("https://") && Uri.IsWellFormedUriString(SipSplunkObj.splunkUrl, UriKind.RelativeOrAbsolute)) { goodentry = true; }
                 }
@@ -363,18 +367,22 @@ public class SipSplunk
                 while (!goodentry){
                     Console.WriteLine("Enter Splunk application and search string. Must contain \"index=\"");
                     Console.Write("example: search index=siplogs 2035551212 : ");
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.Write("search index=");
+                    Console.CursorLeft -= 13;
+                    Console.ForegroundColor = ConsoleColor.Gray;
                     SipSplunkObj.searchStrg = Console.ReadLine();
                     if (SipSplunkObj.searchStrg.Contains("index=")) { goodentry = true; }
                 }
             }
             goodentry = false;
-            if (String.IsNullOrEmpty(SipSplunkObj.logMode) || !(SipSplunkObj.logMode.Contains("pcap") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")))
+            if (String.IsNullOrEmpty(SipSplunkObj.logMode) || !(SipSplunkObj.logMode.Contains("tcpdump") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")))
             {
                 while (!goodentry)
                 {
-                    Console.Write("Enter the log type pcap, audiocodes or audiocodesSyslog : ");
+                    Console.Write("Enter the log type tcpdump, audiocodes or audiocodesSyslog : ");
                     SipSplunkObj.logMode = Console.ReadLine();
-                    if (SipSplunkObj.logMode.Contains("pcap") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")) { goodentry = true; }
+                    if (SipSplunkObj.logMode.Contains("tcpdump") || SipSplunkObj.logMode.Contains("audiocodes") || SipSplunkObj.logMode.Contains("audiocodesSyslog")) { goodentry = true; }
                 }
             }
             goodentry = false;
@@ -384,7 +392,11 @@ public class SipSplunk
                     while (!goodentry){
                     Console.WriteLine("Enter search begining time in format 2018-02-6T06:00:00.000-05:00 or");
                     Console.Write("relative -2 days or -5h. (s,m,h,d,w,mon,q,y) : ");
-                    SipSplunkObj.earliest = Console.ReadLine();
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.Write("YYYY-MM-DDTHH:mm:ss.sss+hh:mm");
+                        Console.CursorLeft -= 29;
+                        Console.ForegroundColor = ConsoleColor.Gray;
+                        SipSplunkObj.earliest = Console.ReadLine();
                     if (earliestTimeAndDateRGX.IsMatch(SipSplunkObj.earliest)) { goodentry = true; }
                     }
                 }
@@ -393,7 +405,11 @@ public class SipSplunk
                     while (!goodentry){
                         Console.WriteLine("Enter search end time in format 2018-02-6T06:00:00.000-05:00,");
                         Console.Write("relative(s,m,h,d,w,mon,q,y) or now : ");
-                    SipSplunkObj.latest = Console.ReadLine();
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.Write("YYYY-MM-DDTHH:mm:ss.sss+hh:mm");
+                        Console.CursorLeft -= 29;
+                        Console.ForegroundColor = ConsoleColor.Gray;
+                        SipSplunkObj.latest = Console.ReadLine();
                     if (latestTimeAndDateRGX.IsMatch(SipSplunkObj.latest)) { goodentry = true; }
                     }
                 }
@@ -456,7 +472,7 @@ public class SipSplunk
                     TopLine("Creating splunk job " + searchStrg, 0);
                     switch (logMode)
                     {
-                        case "pcap":
+                        case "tcpdump":
                             SplunkCallLegsQuery(service).Wait();
                             break;
                         case "audiocodes":
@@ -875,7 +891,7 @@ public class SipSplunk
                 TopLine("Creating splunk job  for SIP messages " + searchStrg, 0);
                 switch (logMode)
                 {
-                    case "pcap":
+                    case "tcpdump":
                         SplunkSIPMessagesQuery(service).Wait();
                         break;
                     case "audiocodes":
@@ -1647,7 +1663,7 @@ public class SipSplunk
                         }
                         if (DateTime.Parse(callLegs[i][8]) > SelectedCallsLatestTime)
                         {
-                              SelectedCallsLatestTime = DateTime.Parse(callLegs[i][0]);
+                              SelectedCallsLatestTime = DateTime.Parse(callLegs[i][0]).AddSeconds(1);
                         }
                     }
                 }
@@ -1780,20 +1796,30 @@ public class SipSplunk
                 while (!goodentry){
                     Console.Write("Enter Splunk user " + user + " password : ");
                     ConsoleKeyInfo key;
-                    do{
+                    bool clearedPassword = false;
+                    do
+                    {
                         key = Console.ReadKey(true);
-                        if (key.Key == ConsoleKey.Backspace){
+                        if (key.Key == ConsoleKey.Backspace)
+                        {
                             if (password.Length > 0)
                             {
                                 password.RemoveAt(password.Length - 1);
                                 Console.Write("\b \b");
                             }
                         }
-                        if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126)) {
+                        if (((decimal)key.KeyChar) >= 32 && ((decimal)key.KeyChar <= 126))
+                        {
+                            if (!clearedPassword)
+                            {
+                                clearedPassword = true;
+                                password.Clear();
+                            }
                             password.AppendChar(key.KeyChar);
                             Console.Write("*");
                         }
-                    } while (key.Key != ConsoleKey.Enter);
+                    } while (key.Key != ConsoleKey.Enter);                 
+                    
                     Console.WriteLine();
                     if (password.Length>0) goodentry = true;
                 }
@@ -1807,16 +1833,20 @@ public class SipSplunk
                 goodentry = false;                
                 while (!goodentry)
                 {
-                    Console.Write("Enter the log type pcap, audiocodes or audiocodesSyslog [{0}]: ", logMode);
+                    Console.Write("Enter the log type tcpdump, audiocodes or audiocodesSyslog [{0}]: ", logMode);
                     string logModeEntry = Console.ReadLine();
                     if (!string.IsNullOrEmpty(logModeEntry)) { logMode = logModeEntry; }
-                    if (logMode.Contains("pcap") || logMode.Contains("audiocodes") || logMode.Contains("audiocodesSyslog")) { goodentry = true; }
+                    if (logMode.Contains("tcpdump") || logMode.Contains("audiocodes") || logMode.Contains("audiocodesSyslog")) { goodentry = true; }
                 }                
                 goodentry = false;
                 bool goodTimeEntry = false;
                 while (!goodTimeEntry){
                     while (!goodentry){
                         Console.Write("Enter search begining time [{0}]: ", earliest);
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.Write("YYYY-MM-DDTHH:mm:ss.sss+hh:mm");
+                        Console.CursorLeft -= 29;
+                        Console.ForegroundColor = ConsoleColor.Gray;
                         string earliestEntry = Console.ReadLine();
                         if (!string.IsNullOrEmpty(earliestEntry)) { earliest = earliestEntry; }
                         if (earliestTimeAndDateRGX.IsMatch(earliest)) { goodentry = true; }
@@ -1824,6 +1854,10 @@ public class SipSplunk
                     goodentry = false;
                     while (!goodentry) {
                         Console.Write("Enter search end time [{0}]: ", latest);
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.Write("YYYY-MM-DDTHH:mm:ss.sss+hh:mm");
+                        Console.CursorLeft -= 29;
+                        Console.ForegroundColor = ConsoleColor.Gray;
                         string latestEntry = Console.ReadLine();
                         if (!string.IsNullOrEmpty(latestEntry)) { latest = latestEntry; }
                         if (latestTimeAndDateRGX.IsMatch(latest)) { goodentry = true; }
@@ -2452,8 +2486,9 @@ public class SipSplunk
                         flowFileWriter.WriteLine("</head>");
                         flowFileWriter.WriteLine("<body>");
                         flowFileWriter.WriteLine("<pre>");
-                    }
+                    }                    
                     Flow(false);  //display call flow Diagram
+                    flowFileWriter.WriteLine("Created with SIPlogSplunk https://github.com/gregp203/Splunk-SIPlog ");
                     flowFileWriter.WriteLine(" ");
                     flowFileWriter.WriteLine(" ");
                     Console.SetCursorPosition(0, 1);
